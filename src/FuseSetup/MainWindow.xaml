@@ -1,0 +1,27 @@
+<Window x:Class="FuseSetup.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Fuse Launcher 安装向导" Width="620" Height="460"
+        WindowStartupLocation="CenterScreen" ResizeMode="NoResize"
+        WindowStyle="SingleBorderWindow" Background="{StaticResource BgBrush}"
+        Icon="fuse.ico">
+  <Grid Margin="28,24">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+
+    <!-- 内容区 -->
+    <ContentControl x:Name="Page" Grid.Row="0"/>
+
+    <!-- 底部按钮 -->
+    <Grid Grid.Row="1" Margin="0,18,0,0">
+      <Button x:Name="BackBtn" Content="上一步" Style="{StaticResource Btn}"
+              HorizontalAlignment="Left" Width="110" Visibility="Collapsed" Click="Back_Click"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button x:Name="NextBtn" Content="下一步" Style="{StaticResource PrimaryBtn}"
+                Width="130" Click="Next_Click"/>
+      </StackPanel>
+    </Grid>
+  </Grid>
+</Window>

@@ -1,0 +1,61 @@
+<Window x:Class="Fuse.App.WidgetWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Fuse Launcher" Width="460" Height="380"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" Topmost="True" ShowActivated="False"
+        ResizeMode="NoResize" UseLayoutRounding="True">
+  <Grid x:Name="Root" Background="Transparent">
+
+    <!-- 防误触安全区:透明包裹容器(花瓣展开最外沿 + 缓冲)。
+         大圆与五花瓣是其子元素 → 鼠标在任意子元素/缝隙上时 SafeArea.IsMouseOver 恒为真,
+         只有整体移出容器边界才触发收回(FR-12 防闪烁核心)。 -->
+    <!-- 背景 alpha=1:肉眼不可见,但阻止分层窗口的逐像素点击穿透(半距离收回的根因) -->
+    <Grid x:Name="SafeArea" Background="#01000000"
+          Width="240" Height="240" HorizontalAlignment="Center" VerticalAlignment="Center">
+      <!-- 五花瓣:叠于大圆中心(初始藏于背后),展开时沿圆弧飞出成正五边形槽位。
+           Margin 101 = 圆心 138 - 花瓣半宽 37,保证五瓣的飞行圆心与大圆圆心重合 -->
+      <Button x:Name="PetalLogin" Style="{StaticResource PetalButton}" Content="登录"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              Click="Petal_Click" Tag="login"/>
+      <Button x:Name="PetalDownload" Style="{StaticResource PetalButton}" Content="下载"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              Click="Petal_Click" Tag="download"/>
+      <Button x:Name="PetalSettings" Style="{StaticResource PetalButton}" Content="设置"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              Click="Petal_Click" Tag="settings"/>
+      <Button x:Name="PetalVersions" Style="{StaticResource PetalButton}" Content="版本"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              Click="Petal_Click" Tag="versions"/>
+      <!-- 更多:图标先留空(内容待设计),只保留玻璃盘与自动化名称 -->
+      <Button x:Name="PetalMore" Style="{StaticResource PetalButton}"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              Click="Petal_Click" Tag="more"/>
+
+      <!-- 中心启动大圆(80px,可拖动/单击启动;启动特效期间由代码挂 Scale/Translate 变换) -->
+      <Grid x:Name="Orb" Width="80" Height="80"
+            HorizontalAlignment="Left" VerticalAlignment="Top" Margin="98,98,0,0"
+            Cursor="Hand" MouseLeftButtonDown="Orb_MouseLeftButtonDown"
+            MouseMove="Orb_MouseMove"
+            MouseLeftButtonUp="Orb_MouseLeftButtonUp" MouseLeave="Orb_MouseLeave">
+      <Ellipse x:Name="OrbDisc" Fill="{DynamicResource OrbFillBrush}" Effect="{DynamicResource OrbGlow}"/>
+      <Ellipse Margin="3">
+        <Ellipse.Fill>
+          <RadialGradientBrush GradientOrigin="0.32,0.28">
+            <GradientStop Color="#47FFFFFF" Offset="0"/>
+            <GradientStop Color="#00FFFFFF" Offset="0.6"/>
+          </RadialGradientBrush>
+        </Ellipse.Fill>
+      </Ellipse>
+      <!-- 雕刻层:苦力怕形状的凹坑(坑底压暗 + 上/左受光亮边 + 下/右落影),不参与命中测试 -->
+      <Image x:Name="OrbCarved" Stretch="Fill" IsHitTestVisible="False"
+             RenderOptions.BitmapScalingMode="HighQuality"/>
+      <!-- 成功爆闪:白色覆盖层,平时全透明,由启动特效每帧驱动不透明度 -->
+      <Ellipse x:Name="OrbFlash" Fill="#FFFFFFFF" Opacity="0" IsHitTestVisible="False"/>
+      </Grid>
+    </Grid>
+
+    <!-- 启动特效层:能量环 / 成功闪光 / 火花(盖在 SafeArea 之上,不参与命中) -->
+    <Canvas x:Name="FxLayer" IsHitTestVisible="False"/>
+  </Grid>
+</Window>

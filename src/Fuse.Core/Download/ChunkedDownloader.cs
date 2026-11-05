@@ -1,0 +1,348 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
+
+namespace Fuse.Core.Download;
+
+/// <summary>分块断点下载器状态，与 .part 文件同目录、后缀 .chunks.json。</summary>
+public sealed class ChunkState
+{
+    public long TotalSize { get; set; }
+    public long ChunkBytes { get; set; }
+    public string? ExpectedSha1 { get; set; }
+    public List<int> Completed { get; set; } = new();
+}
+
+public sealed class ChunkedDownloadOptions
+{
+    public int Parallelism { get; set; } = 4;
+    public long ChunkBytes { get; set; } = ChunkPlanner.DefaultChunkBytes;
+    public int MaxRetriesPerChunk { get; set; } = 4;
+    /// <summary>校验算法;默认 SHA-1(MC 官方文件全部是 SHA-1),用户下载可传 SHA-256。</summary>
+    public HashAlgo Algo { get; set; } = HashAlgo.Sha1;
+}
+
+public sealed class ChunkedDownloadResult
+{
+    public string DestPath { get; init; } = "";
+    public long TotalBytes { get; init; }
+    public int ChunksResumed { get; init; }
+    public int ChunksDownloaded { get; init; }
+    public bool HashVerified { get; init; }
+}
+
+/// <summary>
+/// 大文件分块下载（FR-01）：Range 并发 + .chunks.json 断点状态 + SHA-1 校验。
+/// 服务器不支持 Range 时退化为单流下载（无断点）。
+/// </summary>
+public sealed class ChunkedDownloader(HttpClient http)
+{
+    public async Task<ChunkedDownloadResult> DownloadAsync(
+        string url,
+        string destPath,
+        string? expectedSha1 = null,
+        ChunkedDownloadOptions? options = null,
+        IProgress<double>? progress = null,
+        CancellationToken cancellation = default)
+    {
+        var opts = options ?? new ChunkedDownloadOptions();
+        var dir = Path.GetDirectoryName(Path.GetFullPath(destPath))!;
+        Directory.CreateDirectory(dir);
+
+        // 已存在且哈希一致:直接跳过(重复导入清单/重跑任务时不用再下一遍)
+        if (File.Exists(destPath) && !string.IsNullOrEmpty(expectedSha1) &&
+            await Hashing.VerifyFileAsync(destPath, expectedSha1, opts.Algo, cancellation)
+                .ConfigureAwait(false))
+        {
+            progress?.Report(1.0);
+            return new ChunkedDownloadResult
+            {
+                DestPath = destPath,
+                TotalBytes = new FileInfo(destPath).Length,
+                HashVerified = true,
+            };
+        }
+
+        var partPath = destPath + ".part";
+        var statePath = destPath + ".chunks.json";
+
+        var (total, supportsRange) = await ProbeAsync(url, cancellation).ConfigureAwait(false);
+        if (!supportsRange)
+        {
+            await DownloadSingleStreamAsync(url, partPath, progress, cancellation).ConfigureAwait(false);
+            await VerifyOrThrowAsync(partPath, expectedSha1, opts.Algo, cancellation).ConfigureAwait(false);
+            ReplaceFile(partPath, destPath);
+            return new ChunkedDownloadResult { DestPath = destPath, TotalBytes = total, HashVerified = true };
+        }
+
+        var allChunks = ChunkPlanner.Plan(total, opts.ChunkBytes);
+        var state = LoadState(statePath, total, opts.ChunkBytes, expectedSha1);
+        var completed = new HashSet<int>(state.Completed.Where(i => i >= 0 && i < allChunks.Count));
+
+        // 复用已有 .part（断点）；尺寸不一致则重置
+        var reuse = File.Exists(partPath) && new FileInfo(partPath).Length == total;
+        if (!reuse)
+        {
+            using (var fs = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None))
+                fs.SetLength(total);
+            completed.Clear();
+            state.Completed.Clear();
+        }
+
+        var pending = new List<(int Index, ByteRange Chunk)>();
+        for (var i = 0; i < allChunks.Count; i++)
+            if (!completed.Contains(i))
+                pending.Add((i, allChunks[i]));
+        var resumed = allChunks.Count - pending.Count;
+        var doneBytes = total - pending.Sum(p => p.Chunk.Length);
+        var report = new Action(() => progress?.Report(Volatile.Read(ref doneBytes) / (double)Math.Max(1, total)));
+        report();
+
+        var stateLock = new object();
+        // 并发随文件大小自适应:小文件(<=8MB)用 2 线程足够,再高只有调度开销;
+        // 大文件拉满配置并发,配合 Range 分段把带宽吃满(实测 MC 官方 CDN 16 并发可到 2MB/s+)
+        var effectiveParallelism = total <= 8 * 1024 * 1024
+            ? Math.Min(opts.Parallelism, 2)
+            : opts.Parallelism;
+        using (var gate = new SemaphoreSlim(Math.Max(1, effectiveParallelism)))
+        {
+            var workers = pending.Select(item => Task.Run(async () =>
+            {
+                await gate.WaitAsync(cancellation).ConfigureAwait(false);
+                try
+                {
+                    await DownloadChunkAsync(http, url, partPath, item.Chunk, opts.MaxRetriesPerChunk, cancellation)
+                        .ConfigureAwait(false);
+                    lock (stateLock)
+                    {
+                        state.Completed.Add(item.Index);
+                        WriteState(statePath, state);
+                    }
+                    Interlocked.Add(ref doneBytes, item.Chunk.Length);
+                    report();
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            }, cancellation));
+
+            try
+            {
+                await Task.WhenAll(workers).ConfigureAwait(false);
+            }
+            catch (Exception) when (!cancellation.IsCancellationRequested)
+            {
+                // 分块在镜像上不稳定(实测 8MB 块并发会超时/被限流):丢弃断点,退回单流全量下载。
+                // 镜像的全量 GET 反而更快(17.5MB / 6s),这条兜底比死磕 Range 可靠。
+                TryDeleteFile(statePath);
+                TryDeleteFile(partPath);
+                await DownloadSingleStreamAsync(url, partPath, progress, cancellation).ConfigureAwait(false);
+                await VerifyOrThrowAsync(partPath, expectedSha1, opts.Algo, cancellation).ConfigureAwait(false);
+                ReplaceFile(partPath, destPath);
+                return new ChunkedDownloadResult
+                {
+                    DestPath = destPath,
+                    TotalBytes = total,
+                    HashVerified = true,
+                };
+            }
+        }
+
+        await VerifyOrThrowAsync(partPath, expectedSha1, opts.Algo, cancellation).ConfigureAwait(false);
+        File.Delete(statePath);
+        ReplaceFile(partPath, destPath);
+
+        return new ChunkedDownloadResult
+        {
+            DestPath = destPath,
+            TotalBytes = total,
+            ChunksResumed = resumed,
+            ChunksDownloaded = pending.Count,
+            HashVerified = true,
+        };
+    }
+
+    /// <summary>
+    /// 探测文件大小与 Range 支持。**必须带重试**:镜像限流(429)时这里是最先撞上的地方,
+    /// 裸请求会让整个大文件下载在第一步就失败(用户看到的"原版也下不了"就是这条)。
+    /// </summary>
+    private async Task<(long Total, bool SupportsRange)> ProbeAsync(string url, CancellationToken ct)
+    {
+        Exception? last = null;
+        for (var attempt = 0; attempt <= 3; attempt++)
+        {
+            if (attempt > 0) await Task.Delay(Math.Min(1500 * attempt, 8000), ct).ConfigureAwait(false);
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, UrlMirror.ForAttempt(url, attempt));
+                request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+                using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                    .ConfigureAwait(false);
+
+                if ((int)response.StatusCode == 429)
+                {
+                    UrlMirror.NoteThrottled();
+                    last = new IOException("429 请求过于频繁");
+                    continue;
+                }
+
+                if (response.StatusCode == System.Net.HttpStatusCode.PartialContent)
+                {
+                    var contentRange = response.Content.Headers.ContentRange;
+                    if (contentRange?.Length.HasValue == true)
+                        return (contentRange.Length.Value, true);
+                }
+                if (response.Content.Headers.ContentLength.HasValue)
+                    return (response.Content.Headers.ContentLength.Value, false);
+                return (-1, false);
+            }
+            // HttpClient 超时同样抛 TaskCanceledException,只有调用方真的取消才终止
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+            }
+        }
+        throw new IOException("探测文件大小失败(重试 3 次)", last);
+    }
+
+    private static async Task DownloadChunkAsync(
+        HttpClient http, string url, string partPath, ByteRange chunk, int maxRetries, CancellationToken ct)
+    {
+        Exception? last = null;
+        for (var attempt = 0; attempt <= maxRetries; attempt++)
+        {
+            if (attempt > 0)
+            {
+                var throttled = last is IOException io && io.Message.StartsWith("429", StringComparison.Ordinal);
+                await Task.Delay(Math.Min((throttled ? 4000 : 1000) * attempt, throttled ? 20000 : 5000), ct)
+                    .ConfigureAwait(false);
+            }
+            try
+            {
+                // Balanced:首次官方,失败后转镜像(熔断期内恒官方)
+                var attemptUrl = UrlMirror.ForAttempt(url, attempt);
+                using var request = new HttpRequestMessage(HttpMethod.Get, attemptUrl);
+                request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(
+                    chunk.Offset, chunk.Offset + chunk.Length - 1);
+                using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                    .ConfigureAwait(false);
+                if ((int)response.StatusCode == 429)
+                {
+                    UrlMirror.NoteThrottled();
+                    throw new IOException("429 请求过于频繁");
+                }
+                response.EnsureSuccessStatusCode();
+
+                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                using var target = new FileStream(partPath, FileMode.Open, FileAccess.Write, FileShare.Read,
+                    64 * 1024, useAsync: true);
+                target.Seek(chunk.Offset, SeekOrigin.Begin);
+                await stream.CopyToAsync(target, 64 * 1024, ct).ConfigureAwait(false);
+
+                var written = target.Position - chunk.Offset;
+                if (written != chunk.Length)
+                    throw new IOException($"分块 {chunk.Offset} 字节数不符：期望 {chunk.Length}，实际 {written}");
+                return;
+            }
+            // HttpClient 超时同样抛 TaskCanceledException,只有调用方真的取消才终止
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+            }
+        }
+        throw new IOException($"分块 {chunk.Offset}+{chunk.Length} 重试 {maxRetries} 次后仍失败", last);
+    }
+
+    private async Task DownloadSingleStreamAsync(
+        string url, string partPath, IProgress<double>? progress, CancellationToken ct)
+    {
+        using var response = await http.GetAsync(UrlMirror.ForAttempt(url, 1), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        var total = response.Content.Headers.ContentLength ?? -1;
+        using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+        // 256KB 缓冲:单流回退时 64KB 缓冲在高带宽链路上会成为 CPU 拷贝瓶颈
+        using var target = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, 256 * 1024, useAsync: true);
+        var buffer = new byte[256 * 1024];
+        long done = 0;
+        int read;
+        var lastReport = DateTime.MinValue;
+        while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+        {
+            await target.WriteAsync(buffer, 0, read, ct).ConfigureAwait(false);
+            done += read;
+            // 高速链路上每秒报告一次即可:每次 Report 都跨线程投递,高频投递会拖慢拷贝循环
+            var now = DateTime.UtcNow;
+            if (total > 0 && (now - lastReport).TotalMilliseconds >= 250)
+            {
+                lastReport = now;
+                progress?.Report(done / (double)total);
+            }
+        }
+        if (total > 0) progress?.Report(1.0);
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private static ChunkState LoadState(string statePath, long total, long chunkBytes, string? expectedSha1)
+    {
+        try
+        {
+            if (File.Exists(statePath))
+            {
+                var state = JsonConvert.DeserializeObject<ChunkState>(File.ReadAllText(statePath));
+                if (state != null && state.TotalSize == total && state.ChunkBytes == chunkBytes
+                    && string.Equals(state.ExpectedSha1, expectedSha1, StringComparison.OrdinalIgnoreCase))
+                    return state;
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (JsonException)
+        {
+            // 状态文件损坏即作废，全部重下
+        }
+        return new ChunkState { TotalSize = total, ChunkBytes = chunkBytes, ExpectedSha1 = expectedSha1 };
+    }
+
+    private static void WriteState(string statePath, ChunkState state)
+    {
+        var tmp = statePath + ".tmp";
+        File.WriteAllText(tmp, JsonConvert.SerializeObject(state));
+        ReplaceFile(tmp, statePath);
+    }
+
+    /// <summary>netstandard2.0 没有 File.Move(src,dst,true)，用删后拷贝替代。</summary>
+    private static void ReplaceFile(string src, string dst)
+    {
+        if (File.Exists(dst)) File.Delete(dst);
+        File.Copy(src, dst, true);
+        if (src != dst) File.Delete(src);
+    }
+
+    private static async Task VerifyOrThrowAsync(string path, string? expectedSha1, HashAlgo algo, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(expectedSha1)) return;
+        if (!await Hashing.VerifyFileAsync(path, expectedSha1, algo, ct).ConfigureAwait(false))
+            throw new IOException("校验不通过：文件可能损坏或被篡改（" + algo + " 不匹配）");
+    }
+}

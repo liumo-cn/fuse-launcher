@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>Fuse.App</RootNamespace>
+    <AssemblyName>Fuse Launcher</AssemblyName>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.1.1</Version>
+    <Product>Fuse Launcher</Product>
+    <Company>liumo</Company>
+    <AssemblyTitle>Fuse Launcher</AssemblyTitle>
+    <Description>Fuse Launcher —— 轻量的 Minecraft 启动器（作者 liumo）</Description>
+    <ApplicationIcon>Assets\fuse.ico</ApplicationIcon>
+    <LangVersion>latest</LangVersion>
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Fuse.Core\Fuse.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\bolt.png" />
+    <Resource Include="Assets\fuse.ico" />
+    <Resource Include="Assets\login.png" />
+    <Resource Include="Assets\download.png" />
+    <Resource Include="Assets\settings.png" />
+    <Resource Include="Assets\versions.png" />
+    <Resource Include="Assets\more.png" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,43 @@
+# 构建产物与本地数据 —— 一律不入仓
+bin/
+obj/
+dist/
+tmp/
+archive/
+.backup-*/
+.zcode/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# 调试符号（含本地源码路径）
+*.pdb
+
+# 运行期数据（账号、任务、配置、日志）
+config.json
+tasks.json
+profiles.json
+*.log
+*.chk
+*.part
+
+# 安装器中间产物
+src/FuseSetup/payload.zip
+
+# 内部文档（不随仓库公开）
+docs/legal-risk-analysis.md
+docs/opensource-plan.md
+docs/release-checklist-*.md
+/*-security-recommendations.md
+th.ps1
+
+# 可选二进制（从官方 release 获取，不入仓）
+tools/*.exe
+
+# 未使用的 Mojang 角色素材（不随仓库分发）
+src/Fuse.App/Assets/creeper.png
+
+docs/curseforge-application.md

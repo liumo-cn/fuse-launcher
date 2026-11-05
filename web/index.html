@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fuse Launcher 下载</title>
+<style>
+  :root{
+    --accent:#A416E5;
+    --accent2:#6C0FA0;
+    --bg:#16171B;
+    --card:#1E2026;
+    --line:#2E3038;
+    --text:#F5F5F7;
+    --muted:#A6A6B2;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:
+      radial-gradient(900px 600px at 15% -10%, rgba(164,22,229,.35), transparent 60%),
+      radial-gradient(700px 500px at 95% 10%, rgba(108,15,160,.25), transparent 60%),
+      var(--bg);
+    color:var(--text);font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+    line-height:1.6;min-height:100vh;
+  }
+  .wrap{max-width:980px;margin:0 auto;padding:56px 24px 40px}
+  .hero{display:flex;align-items:center;gap:28px;flex-wrap:wrap}
+  .orb{
+    width:96px;height:96px;border-radius:50%;flex:0 0 auto;
+    background:radial-gradient(circle at 35% 30%, #C44BFF, var(--accent) 55%, var(--accent2) 100%);
+    box-shadow:0 0 50px rgba(164,22,229,.55), inset 0 0 26px rgba(255,255,255,.18);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .orb svg{width:46px;height:46px;filter:drop-shadow(0 2px 6px rgba(0,0,0,.35))}
+  h1{font-size:44px;line-height:1.15;margin:0 0 6px;letter-spacing:-.5px}
+  .tag{color:var(--muted);font-size:16px;margin:0 0 12px}
+  .pill{display:inline-flex;align-items:center;gap:8px;background:rgba(164,22,229,.18);
+    border:1px solid rgba(164,22,229,.45);color:#E9C7FF;border-radius:999px;padding:4px 12px;font-size:13px}
+  .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:#C44BFF;box-shadow:0 0 10px #C44BFF}
+  .download{margin-top:34px;background:var(--card);border:1px solid var(--line);border-radius:20px;padding:26px}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));color:white;text-decoration:none;
+    font-size:20px;font-weight:700;padding:16px 30px;border-radius:14px;
+    box-shadow:0 14px 34px rgba(164,22,229,.35);
+  }
+  .btn:hover{filter:brightness(1.08)}
+  .btn:active{transform:translateY(1px)}
+  .meta{display:flex;gap:26px;flex-wrap:wrap;color:var(--muted);font-size:14px;margin-top:16px}
+  .meta b{color:var(--text);font-weight:600}
+  .sha{margin-top:18px;background:#121317;border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+       font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#B9B9C6;word-break:break-all}
+  .sha .row{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:6px}
+  .sha .row span{font-family:system-ui,"Microsoft YaHei";color:var(--muted);font-size:12px}
+  .copy{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;
+        padding:3px 10px;font-size:12px;cursor:pointer}
+  .copy:hover{color:var(--text);border-color:#4A4C58}
+  .notes{color:var(--muted);font-size:13px;margin-top:10px;white-space:pre-wrap}
+  h2{font-size:18px;margin:42px 0 16px}
+  .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .step .n{color:#C44BFF;font-weight:700;font-size:13px;letter-spacing:1px}
+  .step h3{margin:6px 0 6px;font-size:16px}
+  .step p{margin:0;color:var(--muted);font-size:14px}
+  code{background:#121317;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12px}
+  .features{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .feature{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .feature h3{margin:0 0 6px;font-size:15px}
+  .feature p{margin:0;color:var(--muted);font-size:13px}
+  .warn{margin-top:18px;background:rgba(224,82,82,.10);border:1px solid rgba(224,82,82,.35);
+        border-radius:12px;padding:14px 16px;font-size:13px;color:#F1C7C7}
+  footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--line);color:#7C7C89;font-size:12px;
+    display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  @media (max-width:640px){
+    h1{font-size:34px}
+    .wrap{padding-top:36px}
+    .hero{gap:18px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hero">
+    <div class="orb" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="white"><path d="M13.2 2 5 13.4h5.2L9.6 22 19 9.7h-5.4L13.2 2z"/></svg>
+    </div>
+    <div>
+      <h1>Fuse Launcher</h1>
+      <p class="tag">悬浮宝珠式的 Minecraft 第三方启动器 · 作者 liumo</p>
+      <span class="pill" id="version">V1.0.0</span>
+    </div>
+  </div>
+
+  <div class="download">
+    <a class="btn" id="download" href="fuse/FuseLauncher-Setup-latest.exe">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 20h16"/>
+      </svg>
+      下载 Fuse Launcher
+    </a>
+    <div class="meta">
+      <div>安装包 <b id="size">约 1.7 MB</b></div>
+      <div>系统 <b>Windows 10 / 11（x64）</b></div>
+      <div>费用 <b>免费</b></div>
+    </div>
+    <div class="sha">
+      <div class="row">
+        <span>SHA-256（下载后可核对）</span>
+        <button class="copy" id="copy" type="button">复制</button>
+      </div>
+      <div id="hash">02a30d016cc0aea70820a2c485bb68b4eed96d5232e630b7b7f601cb78d65b76</div>
+    </div>
+    <div class="notes" id="notes"></div>
+    <div class="warn">
+      安装包没有代码签名，Windows SmartScreen 可能提示「已保护你的电脑」。
+      点「更多信息」→「仍要运行」即可。下载后建议对照上面的 SHA-256。
+    </div>
+  </div>
+
+  <h2>第一次安装</h2>
+  <div class="steps">
+    <div class="step">
+      <div class="n">STEP 01</div>
+      <h3>下载安装包</h3>
+      <p>点上面的按钮下载 <code>FuseLauncher-Setup</code>，约 1.7 MB。</p>
+    </div>
+    <div class="step">
+      <div class="n">STEP 02</div>
+      <h3>运行安装</h3>
+      <p>选择安装目录和游戏目录（默认在文档下）。想要 U 盘/多机使用，可勾选「便携模式」。</p>
+    </div>
+    <div class="step">
+      <div class="n">STEP 03</div>
+      <h3>启动并下载游戏</h3>
+      <p>安装完成后自动打开启动器。点「下载」花瓣选择版本，装好点大圆即可开始。</p>
+    </div>
+  </div>
+
+  <h2>它能做什么</h2>
+  <div class="features">
+    <div class="feature"><h3>下载与启动</h3><p>原版 / Fabric / Forge / NeoForge / OptiFine，自动补 Java、校验文件、多镜像加速。</p></div>
+    <div class="feature"><h3>整合包</h3><p>Modrinth 整合包一键安装，支持本地 .mrpack / zip 导入、原地升级与回滚。</p></div>
+    <div class="feature"><h3>模组与光影</h3><p>模组启停、更新检查、光影前置一键安装，整合包实例会先提醒再装模组。</p></div>
+    <div class="feature"><h3>多游戏目录</h3><p>导入官方或第三方启动器目录，版本、下载、补全都跟随当前选中的目录。</p></div>
+    <div class="feature"><h3>存档与服务器</h3><p>世界备份/还原、服务器列表增删改、一键启动并加入服务器。</p></div>
+    <div class="feature"><h3>出问题能救</h3><p>崩溃分析、安全模式、文件校验修复、游戏日志与崩溃报告内置查看。</p></div>
+  </div>
+
+  <footer>
+    <div>© 2026 liumo · Fuse Launcher</div>
+    <div>更新源：fuse-launcher-update.oss-cn-guangzhou.aliyuncs.com</div>
+  </footer>
+</div>
+
+<script>
+(function () {
+  var versionEl = document.getElementById('version');
+  var sizeEl = document.getElementById('size');
+  var hashEl = document.getElementById('hash');
+  var notesEl = document.getElementById('notes');
+  var dl = document.getElementById('download');
+  var copy = document.getElementById('copy');
+
+  // 页面可能放在 OSS 自定义域名下（相对路径可用），也可能放在自己的服务器上
+  // （相对路径没有 /fuse/，需要回退到 OSS 绝对地址；清单读取需要 OSS CORS）。
+  var OSS_BASE = 'https://fuse-launcher-update.oss-cn-guangzhou.aliyuncs.com';
+  dl.href = OSS_BASE + '/fuse/FuseLauncher-Setup-latest.exe';
+
+  function fmtSize(bytes) {
+    if (!bytes || bytes < 0) return '约 1.7 MB';
+    return (bytes / 1048576).toFixed(2) + ' MB';
+  }
+
+  function getManifest(url) {
+    return fetch(url, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error('manifest ' + r.status);
+      return r.json();
+    });
+  }
+
+  // 先试相对路径（页面和清单同源/有反向代理时最稳），失败再试 OSS 绝对地址，
+  // 两次都失败就保留页面里的静态默认值。
+  getManifest('fuse/manifest.json')
+    .catch(function () { return getManifest(OSS_BASE + '/fuse/manifest.json'); })
+    .then(function (m) {
+      if (!m) return;
+      if (m.version) {
+        versionEl.textContent = 'V' + m.version;
+        document.title = 'Fuse Launcher ' + m.version + ' 下载';
+      }
+      if (m.url) dl.href = m.url;
+      if (m.size) sizeEl.textContent = fmtSize(m.size);
+      if (m.sha256) hashEl.textContent = m.sha256;
+      notesEl.textContent = m.notes || '';
+    })
+    .catch(function () { /* 清单拉不到就用页面里的默认值 */ });
+
+  copy.addEventListener('click', function () {
+    var text = hashEl.textContent.trim();
+    function done() { copy.textContent = '已复制'; setTimeout(function () { copy.textContent = '复制'; }, 1500); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, done);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta); done();
+    }
+  });
+})();
+</script>
+</body>
+</html>

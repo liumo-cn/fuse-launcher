@@ -1,0 +1,6 @@
+<Project>
+  <!-- 中国网络环境加速:nuget.org 优先,华为云镜像兜底 -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" Condition="'$(TargetFramework)' == 'net48'" />
+  </ItemGroup>
+</Project>

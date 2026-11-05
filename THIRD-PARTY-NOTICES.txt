@@ -1,0 +1,88 @@
+Fuse Launcher — third-party notices
+====================================
+
+This project is licensed under the GNU General Public License, version 3
+(see LICENSE). It includes or depends on the following third-party
+components. Their licenses are reproduced or referenced below; the full
+texts ship with the official installer under "About → Open source
+licenses" and in this file.
+
+--------------------------------------------------------------------------
+Runtime dependencies
+--------------------------------------------------------------------------
+
+Newtonsoft.Json 13.0.3
+  License: MIT
+  Copyright (c) 2007 James Newton-King
+  https://github.com/JamesNK/Newtonsoft.Json
+
+Microsoft.Win32.Registry 5.0.0
+  License: MIT
+  Copyright (c) .NET Foundation and Contributors
+  https://github.com/dotnet/runtime
+
+System.Diagnostics.PerformanceCounter 8.0.0
+  License: MIT
+  Copyright (c) .NET Foundation and Contributors
+  https://github.com/dotnet/runtime
+
+System.Security.Cryptography.ProtectedData 8.0.0
+  License: MIT
+  Copyright (c) .NET Foundation and Contributors
+  https://github.com/dotnet/runtime
+
+MIT License (applies to the components listed above)
+----------------------------------------------------
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------
+Optional components
+--------------------------------------------------------------------------
+
+PresentMon 2.6.0 (optional FPS capture helper, not required to run)
+  License: MIT
+  Copyright (c) 2017-2024 Intel Corporation
+  https://github.com/GameTechDev/PresentMon
+  Used as an external process (ETW capture). The launcher does not modify,
+  inject into, or redistribute it as part of itself; users may obtain it
+  from the official release page.
+
+--------------------------------------------------------------------------
+Build-time only
+--------------------------------------------------------------------------
+
+PolySharp 1.15.0
+  License: MIT
+  https://github.com/Sergio0694/PolySharp
+
+Microsoft.NET.Test.Sdk 17.11.1, xunit 2.9.2, xunit.runner.visualstudio 2.8.2
+  Licenses: MIT / Apache-2.0 (see upstream packages)
+
+--------------------------------------------------------------------------
+Data and services
+--------------------------------------------------------------------------
+
+Minecraft game files, assets and metadata are downloaded at runtime from
+Mojang's official servers or from public mirrors, and are never bundled
+with this project. Minecraft is a trademark of Mojang Synergies AB.
+This project is not affiliated with or endorsed by Mojang or Microsoft.
+
+Mod and modpack metadata is provided by Modrinth (and, where enabled,
+CurseForge) through their public APIs. Downloads use the URLs returned by
+those APIs; no mod files are mirrored or redistributed by this project.

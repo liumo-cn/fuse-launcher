@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>FuseSetup</RootNamespace>
+    <AssemblyName>FuseSetup</AssemblyName>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.1.1</Version>
+    <Product>Fuse Launcher Setup</Product>
+    <Company>liumo</Company>
+    <ApplicationIcon>fuse.ico</ApplicationIcon>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- payload.zip 在构建前由 build-installer.ps1 生成(内嵌整个启动器运行时) -->
+    <EmbeddedResource Include="payload.zip" Condition="Exists('payload.zip')" />
+    <Resource Include="fuse.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
+
+</Project>
