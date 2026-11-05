@@ -4,6 +4,8 @@ A lightweight, open-source Minecraft launcher for Windows.
 
 **By liumo** · GPL-3.0 · Windows 10 / 11 · .NET Framework 4.8
 
+![Fuse Launcher](docs/images/social-preview.png)
+
 ---
 
 ## Features
