@@ -268,7 +268,7 @@ public partial class App : Application
     private void OnDispatcherException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         WriteCrashLog("UI 线程未处理异常", e.Exception);
-        MessageBox.Show($"发生未处理的异常：{e.Exception.Message}\n\n完整堆栈已写入 crash.log（%APPDATA%\\MCDownloader）",
+        MessageBox.Show($"发生未处理的异常：{e.Exception.Message}\n\n完整堆栈已写入 crash.log（%APPDATA%\\FuseLauncher）",
             AppServices.ProductName, MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;
     }

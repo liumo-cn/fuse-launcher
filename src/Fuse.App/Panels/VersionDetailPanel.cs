@@ -2369,8 +2369,9 @@ public class VersionDetailPanel : UserControl
             Toast("房间还没创建好，稍等一下", _multiplayerCard);
             return;
         }
-        Clipboard.SetText(invite);
-        Toast("邀请已复制，发给朋友就行", _multiplayerCard);
+        Toast(ClipboardHelper.TrySetText(invite)
+            ? "邀请已复制，发给朋友就行"
+            : "复制失败：剪贴板被其他程序占用，请再点一次", _multiplayerCard);
     }
 
     private void JoinRoomFromBox()

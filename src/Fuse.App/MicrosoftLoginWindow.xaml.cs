@@ -96,8 +96,9 @@ public partial class MicrosoftLoginWindow : Window
         if (_deviceCode == null) return;
         try
         {
-            Clipboard.SetText(_deviceCode.UserCode);
-            StatusText.Text = "代码已复制，去浏览器粘贴即可。";
+            StatusText.Text = ClipboardHelper.TrySetText(_deviceCode.UserCode)
+                ? "代码已复制，去浏览器粘贴即可。"
+                : "复制失败（剪贴板被占用），请手动记录代码。";
         }
         catch (Exception)
         {

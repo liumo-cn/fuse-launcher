@@ -141,8 +141,9 @@ internal sealed class MultiplayerJoinWindow : Window
             var code = _guest?.AnswerCode;
             if (!string.IsNullOrEmpty(code))
             {
-                Clipboard.SetText(code);
-                if (_p2pStatus != null) _p2pStatus.Text = "回执码已复制——发给房主,等房主粘贴后点「直连并启动」";
+                if (_p2pStatus != null) _p2pStatus.Text = ClipboardHelper.TrySetText(code)
+                    ? "回执码已复制——发给房主,等房主粘贴后点「直连并启动」"
+                    : "复制失败（剪贴板被占用）,请稍后重试";
             }
         };
         row.Children.Add(copy);
