@@ -155,17 +155,14 @@ public class DownloadQueueTests
             var queue = new DownloadQueue(store, executor, maxConcurrent: 1);
 
             var task = queue.Enqueue(new DownloadTaskRecord { Name = "job" });
-            await Task.Delay(200);
-            Assert.Equal(DownloadTaskStatus.Downloading, store.Get(task.TaskId)!.Status);
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Downloading);
 
             queue.Pause(task.TaskId);
-            await Task.Delay(200);
-            Assert.Equal(DownloadTaskStatus.Paused, store.Get(task.TaskId)!.Status);
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Paused);
 
             gate.TrySetResult(true);
             queue.Resume(task.TaskId);
-            await Task.Delay(300);
-            Assert.Equal(DownloadTaskStatus.Completed, store.Get(task.TaskId)!.Status);
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Completed);
         }
         finally
         {
@@ -186,11 +183,9 @@ public class DownloadQueueTests
             var queue = new DownloadQueue(store, executor, maxConcurrent: 1);
 
             var task = queue.Enqueue(new DownloadTaskRecord { Name = "will-fail" });
-            await Task.Delay(200);
-            Assert.Equal(DownloadTaskStatus.Downloading, store.Get(task.TaskId)!.Status);
-            executor.Release(); // 触发假执行器抛出 → 失败
-            await Task.Delay(300);
-            Assert.Equal(DownloadTaskStatus.Failed, store.Get(task.TaskId)!.Status);
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Downloading);
+            executor.Release(); // 触发假执行器抛出 失败
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Failed);
 
             // 换成功执行器重试
             var okGate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -198,12 +193,22 @@ public class DownloadQueueTests
             var queue2 = new DownloadQueue(store, okExecutor, maxConcurrent: 1);
             okGate.TrySetResult(true);
             queue2.Retry(task.TaskId);
-            await Task.Delay(300);
-            Assert.Equal(DownloadTaskStatus.Completed, store.Get(task.TaskId)!.Status);
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Completed);
         }
         finally
         {
             try { Directory.Delete(dir, true); } catch (IOException) { }
         }
+    }
+
+    static async Task WaitForStatusAsync(DownloadTaskStore store, string id, DownloadTaskStatus expected, int timeoutMs = 5000)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (store.Get(id)?.Status == expected) return;
+            await Task.Delay(25);
+        }
+        Assert.Equal(expected, store.Get(id)!.Status);
     }
 }
