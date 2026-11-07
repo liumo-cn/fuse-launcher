@@ -1805,7 +1805,7 @@ public class VersionDetailPanel : UserControl
         host.Children.Add(titleRow);
         host.Children.Add(new TextBlock
         {
-            Text = "一键创建房间，自动选择最佳网络。绝大多数情况下不需要任何设置。",
+            Text = "一般情况都是失败，除非你运营商不拦你IPv6，没有双层NAT...根本没有这样的人！",
             FontSize = 11.5,
             Foreground = T2,
             Opacity = 0.7,
