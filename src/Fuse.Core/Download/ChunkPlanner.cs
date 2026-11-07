@@ -18,6 +18,17 @@ public static class ChunkPlanner
     /// </summary>
     public const long DefaultChunkBytes = 2 * 1024 * 1024;
 
+    /// <summary>
+    /// 按文件大小选块:小文件 512KB(断点更细、并发更均匀),
+    /// 中等 1MB,大文件回到 2MB(少发请求、少被镜像限流)。
+    /// </summary>
+    public static long ChooseChunkBytes(long total)
+    {
+        if (total <= 16L * 1024 * 1024) return 512 * 1024;
+        if (total <= 64L * 1024 * 1024) return 1024 * 1024;
+        return DefaultChunkBytes;
+    }
+
     /// <summary>切满整个文件，不重叠、无缝隙；total 为 0 时返回空。</summary>
     public static IReadOnlyList<ByteRange> Plan(long total, long chunkBytes = DefaultChunkBytes)
     {

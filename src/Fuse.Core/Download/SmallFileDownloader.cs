@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -26,11 +27,15 @@ public sealed class FileDownloadItem
 
 public sealed class SmallFileOptions
 {
-    /// <summary>小文件队列并发度（FR-01：assets 是首次安装的耗时大头）。</summary>
+    /// <summary>并发上限(worker 数)。</summary>
     public int Parallelism { get; set; } = 32;
+    /// <summary>启动并发;连续成功后逐步升到上限,失败时回退。</summary>
+    public int InitialParallelism { get; set; } = 8;
     public int MaxRetries { get; set; } = 3;
-    /// <summary>单个请求的超时。某个源卡住时不能一直等,否则暂停看起来像没反应。</summary>
-    public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(45);
+    /// <summary>连接/响应头超时:这么久拿不到首字节就换源。</summary>
+    public TimeSpan FirstByteTimeout { get; set; } = TimeSpan.FromSeconds(10);
+    /// <summary>停滞超时:body 连续这么久没有新字节才算卡死;还在收数据就不掐。</summary>
+    public TimeSpan StallTimeout { get; set; } = TimeSpan.FromSeconds(20);
 }
 
 public sealed class SmallFileBatchResult
@@ -58,36 +63,57 @@ public sealed class SmallFileDownloader(HttpClient http)
         var downloaded = 0;
         var skipped = 0;
         var done = 0;
+        if (list.Count == 0) return new SmallFileBatchResult();
 
-        using var gate = new SemaphoreSlim(Math.Max(1, opts.Parallelism));
-        var tasks = list.Select(item => Task.Run(async () =>
+        // 固定 worker 池 + 动态并发上限:启动 8 个,连续成功后升到 Parallelism,
+        // 失败/429 时回退。避免"几千个文件各自 Task.Run 等信号量"的调度开销。
+        var queue = new ConcurrentQueue<FileDownloadItem>(list);
+        var remaining = list.Count;
+        using var limiter = new AdaptiveLimiter(opts.InitialParallelism, opts.Parallelism);
+        var workers = Enumerable.Range(0, Math.Max(1, opts.Parallelism)).Select(_ => Task.Run(async () =>
         {
-            await gate.WaitAsync(cancellation).ConfigureAwait(false);
-            try
+            while (true)
             {
-                if (await DownloadOneAsync(item, opts, cancellation).ConfigureAwait(false))
-                    Interlocked.Increment(ref downloaded);
-                else
-                    Interlocked.Increment(ref skipped);
+                cancellation.ThrowIfCancellationRequested();
+                if (!queue.TryDequeue(out var item))
+                {
+                    if (Volatile.Read(ref remaining) == 0) return;
+                    await Task.Delay(20, cancellation).ConfigureAwait(false);
+                    continue;
+                }
+
+                var ok = false;
+                await limiter.WaitAsync(cancellation).ConfigureAwait(false);
+                try
+                {
+                    if (await DownloadOneAsync(item, opts, cancellation).ConfigureAwait(false))
+                        Interlocked.Increment(ref downloaded);
+                    else
+                        Interlocked.Increment(ref skipped);
+                    ok = true;
+                }
+                // 只有调用方真的取消了才终止;HttpClient 超时也是 TaskCanceledException,
+                // 那种属于可重试的网络失败(否则一个慢请求会把整批任务判死)
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    if (!item.Optional) lock (failed) failed.Add(item.DestPath);
+                    else ok = true; // 可缺失项 404 不算网络变差,不要因此降并发
+                }
+                finally
+                {
+                    limiter.Release();
+                    limiter.NoteResult(ok);
+                    Interlocked.Decrement(ref remaining);
+                    var d = Interlocked.Increment(ref done);
+                    progress?.Report(d / (double)list.Count);
+                }
             }
-            // 只有调用方真的取消了才终止;HttpClient 超时也是 TaskCanceledException,
-            // 那种属于可重试的网络失败(否则一个慢请求会把整批任务判死)
-            catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-            {
-                throw;
-            }
-            catch (Exception)
-            {
-                if (!item.Optional) lock (failed) failed.Add(item.DestPath);
-            }
-            finally
-            {
-                var d = Interlocked.Increment(ref done);
-                progress?.Report(d / (double)list.Count);
-                gate.Release();
-            }
-        }, cancellation));
-        await Task.WhenAll(tasks).ConfigureAwait(false);
+        }, cancellation)).ToArray();
+        await Task.WhenAll(workers).ConfigureAwait(false);
 
         return new SmallFileBatchResult
         {
@@ -95,6 +121,72 @@ public sealed class SmallFileDownloader(HttpClient http)
             Downloaded = downloaded,
             Failed = failed,
         };
+    }
+
+    /// <summary>
+    /// 动态并发闸门:最多 Parallelism 个 worker,实际放行数量随成功/失败调整。
+    /// worker 数量固定,等待时只轮询 20ms,不会为几千个文件各起一个任务。
+    /// </summary>
+    private sealed class AdaptiveLimiter : IDisposable
+    {
+        private readonly object _sync = new();
+        private readonly SemaphoreSlim _slots;
+        private readonly int _max;
+        private int _limit;
+        private int _inFlight;
+        private int _cleanSuccesses;
+
+        public AdaptiveLimiter(int initial, int max)
+        {
+            _max = Math.Max(1, max);
+            _limit = Math.Min(Math.Max(1, initial), _max);
+            _slots = new SemaphoreSlim(_max);
+        }
+
+        public async Task WaitAsync(CancellationToken ct)
+        {
+            while (true)
+            {
+                await _slots.WaitAsync(ct).ConfigureAwait(false);
+                lock (_sync)
+                {
+                    if (_inFlight < _limit)
+                    {
+                        _inFlight++;
+                        return;
+                    }
+                }
+                _slots.Release();
+                await Task.Delay(20, ct).ConfigureAwait(false);
+            }
+        }
+
+        public void Release()
+        {
+            lock (_sync) _inFlight--;
+            _slots.Release();
+        }
+
+        public void NoteResult(bool ok)
+        {
+            lock (_sync)
+            {
+                if (!ok)
+                {
+                    _limit = Math.Max(1, _limit / 2);
+                    _cleanSuccesses = 0;
+                    return;
+                }
+                _cleanSuccesses++;
+                if (_cleanSuccesses >= 8 && _limit < _max)
+                {
+                    _limit = Math.Min(_max, _limit * 2);
+                    _cleanSuccesses = 0;
+                }
+            }
+        }
+
+        public void Dispose() => _slots.Dispose();
     }
 
     /// <summary>返回 true 表示执行了下载，false 表示本地已是最新。</summary>
@@ -124,13 +216,14 @@ public sealed class SmallFileDownloader(HttpClient http)
             }
             try
             {
-                // 单请求超时:源站握手后不发数据时,暂停/重试不能一直干等
-                using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                requestCts.CancelAfter(opts.RequestTimeout);
+                // 首字节超时:连上了但服务器不说话就换源;拿到响应头后立刻关掉计时器
+                using var firstCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                firstCts.CancelAfter(opts.FirstByteTimeout);
                 // Balanced 策略:首次走官方,失败后自动转镜像(熔断期内恒官方)
                 var attemptUrl = UrlMirror.ForAttempt(item.Url, attempt);
-                using var response = await http.GetAsync(attemptUrl, HttpCompletionOption.ResponseHeadersRead, requestCts.Token)
+                using var response = await http.GetAsync(attemptUrl, HttpCompletionOption.ResponseHeadersRead, firstCts.Token)
                     .ConfigureAwait(false);
+                firstCts.CancelAfter(Timeout.InfiniteTimeSpan);
                 if ((int)response.StatusCode == 429)
                 {
                     // 镜像限流:触发全局熔断(后续请求改走官方源),再退避重试
@@ -139,10 +232,28 @@ public sealed class SmallFileDownloader(HttpClient http)
                 }
                 response.EnsureSuccessStatusCode();
                 using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 using (var target = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None,
                     64 * 1024, useAsync: true))
                 {
-                    await stream.CopyToAsync(target, 64 * 1024, requestCts.Token).ConfigureAwait(false);
+                    var buffer = new byte[64 * 1024];
+                    while (true)
+                    {
+                        // 每读到一块就重置停滞计时;只有真的没数据了才超时
+                        stallCts.CancelAfter(opts.StallTimeout);
+                        int read;
+                        try
+                        {
+                            read = await stream.ReadAsync(buffer, 0, buffer.Length, stallCts.Token)
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                        {
+                            throw new IOException("下载停滞超时");
+                        }
+                        if (read <= 0) break;
+                        await target.WriteAsync(buffer, 0, read, ct).ConfigureAwait(false);
+                    }
                 }
                 if (!await Hashing.VerifyFileAsync(tmpPath, item.ExpectedHash, item.Algo, ct).ConfigureAwait(false))
                     throw new IOException("校验不通过：文件可能损坏或被篡改");

@@ -21,7 +21,8 @@ public sealed class ChunkState
 public sealed class ChunkedDownloadOptions
 {
     public int Parallelism { get; set; } = 4;
-    public long ChunkBytes { get; set; } = ChunkPlanner.DefaultChunkBytes;
+    /// <summary>0 = 按文件大小自动选(小文件 512KB,大文件 2MB)。</summary>
+    public long ChunkBytes { get; set; }
     public int MaxRetriesPerChunk { get; set; } = 4;
     /// <summary>校验算法;默认 SHA-1(MC 官方文件全部是 SHA-1),用户下载可传 SHA-256。</summary>
     public HashAlgo Algo { get; set; } = HashAlgo.Sha1;
@@ -106,8 +107,9 @@ public sealed class ChunkedDownloader(HttpClient http)
             return new ChunkedDownloadResult { DestPath = destPath, TotalBytes = total, HashVerified = true };
         }
 
-        var allChunks = ChunkPlanner.Plan(total, opts.ChunkBytes);
-        var state = LoadState(statePath, total, opts.ChunkBytes, expectedSha1);
+        var chunkBytes = opts.ChunkBytes > 0 ? opts.ChunkBytes : ChunkPlanner.ChooseChunkBytes(total);
+        var allChunks = ChunkPlanner.Plan(total, chunkBytes);
+        var state = LoadState(statePath, total, chunkBytes, expectedSha1);
         var completed = new HashSet<int>(state.Completed.Where(i => i >= 0 && i < allChunks.Count));
 
         // 复用已有 .part（断点）；尺寸不一致则重置
@@ -132,9 +134,12 @@ public sealed class ChunkedDownloader(HttpClient http)
         var stateLock = new object();
         // 并发随文件大小自适应:小文件(<=8MB)用 2 线程足够,再高只有调度开销;
         // 大文件拉满配置并发,配合 Range 分段把带宽吃满(实测 MC 官方 CDN 16 并发可到 2MB/s+)
-        var effectiveParallelism = total <= 8 * 1024 * 1024
+        // 并发也按文件大小分档:小文件 2 路够了,中等/大文件再拉满
+        var effectiveParallelism = total <= 4 * 1024 * 1024
             ? Math.Min(opts.Parallelism, 2)
-            : opts.Parallelism;
+            : total <= 64 * 1024 * 1024
+                ? Math.Min(opts.Parallelism, 4)
+                : opts.Parallelism;
         using (var gate = new SemaphoreSlim(Math.Max(1, effectiveParallelism)))
         {
             var workers = pending.Select(item => Task.Run(async () =>

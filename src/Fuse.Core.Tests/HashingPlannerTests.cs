@@ -90,6 +90,17 @@ public class ChunkPlannerTests
         Assert.Single(remain);
         Assert.Equal(10, remain[0].Offset);
     }
+
+    [Theory]
+    [InlineData(1L, 512L * 1024)]
+    [InlineData(16L * 1024 * 1024, 512L * 1024)]
+    [InlineData(16L * 1024 * 1024 + 1, 1024L * 1024)]
+    [InlineData(64L * 1024 * 1024, 1024L * 1024)]
+    [InlineData(64L * 1024 * 1024 + 1, 2L * 1024 * 1024)]
+    public void ChooseChunkBytes_BySize(long total, long expected)
+    {
+        Assert.Equal(expected, ChunkPlanner.ChooseChunkBytes(total));
+    }
 }
 
 public class DownloadPlannerTests
