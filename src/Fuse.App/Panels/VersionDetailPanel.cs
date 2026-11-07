@@ -1864,6 +1864,7 @@ public class VersionDetailPanel : UserControl
             Style = (Style)Application.Current.Resources["DarkInput"],
             FontSize = 11,
             IsReadOnly = true,
+            Padding = new Thickness(12, 3),
             Margin = new Thickness(0, 6, 0, 0),
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
