@@ -78,17 +78,20 @@ public sealed class LanPortWatcher : IDisposable
 
     private LanScanResult Scan(string content)
     {
-        // 端口与 mod 地址都要:有 mod 公网地址走隧道,有端口走直连
+        // 都取"最后一个"匹配:日志里可能同时留着上一局(旧)和本局(新)的开放记录,
+        // 最近一次开放才是当前房间;配合 WaitForAsync 的存活过滤器把旧端口淘汰掉
         (string Host, int Port)? port = null;
-        foreach (var regex in PortPatterns)
+        foreach (var line in content.Split('\n'))
         {
-            var m = regex.Match(content);
-            if (m.Success && int.TryParse(m.Groups[m.Groups.Count - 1].Value, out var p)
-                && p >= 1024 && p <= 65535)
+            foreach (var regex in PortPatterns)
             {
-                var host = m.Groups.Count > 2 ? m.Groups[1].Value : "127.0.0.1";
-                port = (host, p);
-                break;
+                var m = regex.Match(line);
+                if (m.Success && int.TryParse(m.Groups[m.Groups.Count - 1].Value, out var p)
+                    && p >= 1024 && p <= 65535)
+                {
+                    var host = m.Groups.Count > 2 ? m.Groups[1].Value : "127.0.0.1";
+                    port = (host, p);
+                }
             }
         }
 
@@ -117,7 +120,6 @@ public sealed class LanPortWatcher : IDisposable
                 modAddress = candidate;
                 break;
             }
-            if (modAddress != null) break;
         }
         return new LanScanResult(port, modAddress);
     }
