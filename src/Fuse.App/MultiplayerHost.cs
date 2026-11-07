@@ -105,7 +105,7 @@ internal sealed class MultiplayerHostSession : IDisposable
         LanScanResult scan;
         try
         {
-            scan = _watcher.WaitForAsync(120_000, _cts.Token).GetAwaiter().GetResult();
+            scan = _watcher.WaitForAsync(120_000, _cts.Token, p => LanAlive(p)).GetAwaiter().GetResult();
         }
         catch (OperationCanceledException)
         {

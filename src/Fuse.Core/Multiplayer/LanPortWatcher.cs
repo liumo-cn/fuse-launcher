@@ -48,18 +48,29 @@ public sealed class LanPortWatcher : IDisposable
         _pollMs = pollMs;
     }
 
-    /// <summary>轮询等待端口/公网地址出现;超时返回最后一次扫描结果(null = 没抓到)。</summary>
-    public async Task<LanScanResult> WaitForAsync(int timeoutMs, CancellationToken ct = default)
+    /// <summary>
+    /// 轮询等待端口/公网地址出现;超时返回最后一次扫描结果(null = 没抓到)。
+    /// alivePort:判断端口是否真的在监听——日志尾部的旧记录(上一局开的)必须跳过。
+    /// </summary>
+    public async Task<LanScanResult> WaitForAsync(int timeoutMs, CancellationToken ct = default, Func<int, bool>? alivePort = null)
     {
         var deadline = UtcNowMs() + timeoutMs;
         var last = new LanScanResult(null, null);
         while (UtcNowMs() < deadline && !ct.IsCancellationRequested)
         {
             last = Scan(ReadTail());
-            if (last.Port != null || last.ModAddress != null) return last;
+            if (IsUsable(last, alivePort)) return last;
             await Task.Delay(_pollMs, ct).ConfigureAwait(false);
         }
         return Scan(ReadTail());
+    }
+
+    /// <summary>匹配到端口但端口已不监听 = 上一局的旧日志,当作没匹配继续等。</summary>
+    private static bool IsUsable(LanScanResult r, Func<int, bool>? alivePort)
+    {
+        if (r.Port == null && r.ModAddress == null) return false;
+        if (r.Port != null && alivePort != null && !alivePort(r.Port.Value.Port)) return false;
+        return true;
     }
 
     /// <summary>不等待,立刻扫一次当前日志。</summary>

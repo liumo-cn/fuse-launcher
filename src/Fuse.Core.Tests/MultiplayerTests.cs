@@ -280,6 +280,31 @@ public class LanPortWatcherTests
     }
 
     [Fact]
+    public async Task SkipsStalePortWhenFilterSaysDead()
+    {
+        // 退出世界后日志里还留着上一局的 Published 行:带存活过滤器必须跳过,继续等新的
+        var dir = Path.Combine(Path.GetTempPath(), "fuse-mp-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var log = Path.Combine(dir, "latest.log");
+        File.WriteAllText(log,
+            "[19:58:10] [Render thread/INFO]: Published LAN server on port 55936\n" +
+            "[Netty NIO IO #2/INFO]: Domain assigned: old-room.jp.e4mc.link\n");
+
+        var watcher = new LanPortWatcher(log, pollMs: 40);
+        var pending = watcher.WaitForAsync(1500, alivePort: p => p == 54321);
+
+        await Task.Delay(200);
+        File.AppendAllText(log,
+            "[20:05:00] [Render thread/INFO]: Published LAN server on port 54321\n" +
+            "[Netty NIO IO #2/INFO]: Domain assigned: new-room.jp.e4mc.link\n");
+
+        var result = await pending;
+        Assert.NotNull(result.Port);
+        Assert.Equal(54321, result.Port!.Value.Port);
+        Assert.Equal("new-room.jp.e4mc.link", result.ModAddress);
+    }
+
+    [Fact]
     public void ReturnsNullWhenOnlyBrokerLinesExist()
     {
         // 握手进行中:还不能下结论,继续等真正的房间域名
