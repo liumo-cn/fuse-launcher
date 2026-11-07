@@ -29,6 +29,8 @@ public sealed class SmallFileOptions
     /// <summary>小文件队列并发度（FR-01：assets 是首次安装的耗时大头）。</summary>
     public int Parallelism { get; set; } = 32;
     public int MaxRetries { get; set; } = 3;
+    /// <summary>单个请求的超时。某个源卡住时不能一直等,否则暂停看起来像没反应。</summary>
+    public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(45);
 }
 
 public sealed class SmallFileBatchResult
@@ -63,7 +65,7 @@ public sealed class SmallFileDownloader(HttpClient http)
             await gate.WaitAsync(cancellation).ConfigureAwait(false);
             try
             {
-                if (await DownloadOneAsync(item, opts.MaxRetries, cancellation).ConfigureAwait(false))
+                if (await DownloadOneAsync(item, opts, cancellation).ConfigureAwait(false))
                     Interlocked.Increment(ref downloaded);
                 else
                     Interlocked.Increment(ref skipped);
@@ -96,7 +98,7 @@ public sealed class SmallFileDownloader(HttpClient http)
     }
 
     /// <summary>返回 true 表示执行了下载，false 表示本地已是最新。</summary>
-    private async Task<bool> DownloadOneAsync(FileDownloadItem item, int maxRetries, CancellationToken ct)
+    private async Task<bool> DownloadOneAsync(FileDownloadItem item, SmallFileOptions opts, CancellationToken ct)
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(item.DestPath))!;
         Directory.CreateDirectory(dir);
@@ -110,7 +112,7 @@ public sealed class SmallFileDownloader(HttpClient http)
 
         var tmpPath = item.DestPath + ".tmp";
         Exception? last = null;
-        for (var attempt = 0; attempt <= maxRetries; attempt++)
+        for (var attempt = 0; attempt <= opts.MaxRetries; attempt++)
         {
             if (attempt > 0)
             {
@@ -122,9 +124,12 @@ public sealed class SmallFileDownloader(HttpClient http)
             }
             try
             {
+                // 单请求超时:源站握手后不发数据时,暂停/重试不能一直干等
+                using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                requestCts.CancelAfter(opts.RequestTimeout);
                 // Balanced 策略:首次走官方,失败后自动转镜像(熔断期内恒官方)
                 var attemptUrl = UrlMirror.ForAttempt(item.Url, attempt);
-                using var response = await http.GetAsync(attemptUrl, HttpCompletionOption.ResponseHeadersRead, ct)
+                using var response = await http.GetAsync(attemptUrl, HttpCompletionOption.ResponseHeadersRead, requestCts.Token)
                     .ConfigureAwait(false);
                 if ((int)response.StatusCode == 429)
                 {
@@ -137,7 +142,7 @@ public sealed class SmallFileDownloader(HttpClient http)
                 using (var target = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None,
                     64 * 1024, useAsync: true))
                 {
-                    await stream.CopyToAsync(target, 64 * 1024, ct).ConfigureAwait(false);
+                    await stream.CopyToAsync(target, 64 * 1024, requestCts.Token).ConfigureAwait(false);
                 }
                 if (!await Hashing.VerifyFileAsync(tmpPath, item.ExpectedHash, item.Algo, ct).ConfigureAwait(false))
                     throw new IOException("校验不通过：文件可能损坏或被篡改");
@@ -158,6 +163,6 @@ public sealed class SmallFileDownloader(HttpClient http)
                 if (File.Exists(tmpPath)) File.Delete(tmpPath);
             }
         }
-        throw new IOException($"下载 {item.Url} 重试 {maxRetries} 次后仍失败", last);
+        throw new IOException($"下载 {item.Url} 重试 {opts.MaxRetries} 次后仍失败", last);
     }
 }

@@ -201,6 +201,61 @@ public class DownloadQueueTests
         }
     }
 
+    /// <summary>暂停请求发出后立即显示"暂停中",执行线程真正退出后才落为 Paused。</summary>
+    [Fact]
+    public async Task Pause_MarksPausingUntilExecutorStops()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcdl-q4-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var store = new DownloadTaskStore(Path.Combine(dir, "tasks.json"));
+            var executor = new IgnoringExecutor();
+            var queue = new DownloadQueue(store, executor, maxConcurrent: 1);
+
+            var task = queue.Enqueue(new DownloadTaskRecord { Name = "slow" });
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Downloading);
+            queue.Pause(task.TaskId);
+            await WaitForAsync(() => store.Get(task.TaskId)?.Pausing == true, 2000);
+
+            var paused = store.Get(task.TaskId)!;
+            Assert.True(paused.Pausing);
+            Assert.Equal(DownloadTaskStatus.Downloading, paused.Status);
+
+            executor.Release.TrySetResult(true);
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Paused);
+            Assert.False(store.Get(task.TaskId)!.Pausing);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>故意忽略取消,直到测试放行;用来观察"暂停中"这个中间态。</summary>
+    private sealed class IgnoringExecutor : IDownloadTaskExecutor
+    {
+        public readonly TaskCompletionSource<bool> Release =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task ExecuteAsync(DownloadTaskRecord record, IProgress<double> progress, CancellationToken cancellation)
+        {
+            await Release.Task.ConfigureAwait(false);
+            if (cancellation.IsCancellationRequested) throw new OperationCanceledException(cancellation);
+        }
+    }
+
+    static async Task WaitForAsync(Func<bool> condition, int timeoutMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return;
+            await Task.Delay(20);
+        }
+        Assert.True(condition(), "condition not met in time");
+    }
+
     static async Task WaitForStatusAsync(DownloadTaskStore store, string id, DownloadTaskStatus expected, int timeoutMs = 5000)
     {
         var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);

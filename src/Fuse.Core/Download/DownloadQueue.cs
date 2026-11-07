@@ -39,6 +39,8 @@ public sealed class DownloadTaskRecord
     public string? Meta { get; set; }
 
     public DownloadTaskStatus Status { get; set; } = DownloadTaskStatus.Queued;
+    /// <summary>已发出暂停请求,等执行线程真正退出。UI 用这个先给"暂停中"反馈。</summary>
+    public bool Pausing { get; set; }
     public double Progress { get; set; }
     public long TotalBytes { get; set; }
     public string? ErrorMessage { get; set; }
@@ -201,11 +203,21 @@ public sealed class DownloadQueue
         {
             if (_running.TryGetValue(taskId, out var cts))
             {
+                Trace("pause " + taskId + " -> cancel");
+                // 先给界面"暂停中"反馈:执行线程可能要等当前请求超时才退出
+                record.Pausing = true;
+                _store.Upsert(record);
+                OnChanged(record);
                 try { cts.Cancel(); }
                 catch (ObjectDisposedException)
                 {
                     // 执行线程刚好收尾并 Dispose 了 CTS:任务已经结束,不用再取消
+                    Trace("pause " + taskId + " cts disposed");
                 }
+            }
+            else
+            {
+                Trace("pause " + taskId + " ignored: not in running");
             }
         }
         // 状态由执行循环在取消后落为 Paused
@@ -246,6 +258,7 @@ public sealed class DownloadQueue
         var record = _store.Get(taskId);
         if (record == null || !onlyFrom.Contains(record.Status)) return;
         record.Status = DownloadTaskStatus.Queued;
+        record.Pausing = false;
         record.ErrorMessage = null;
         _store.Upsert(record);
         OnChanged(record);
@@ -305,25 +318,32 @@ public sealed class DownloadQueue
             OnChanged(record);
         });
         record.Status = DownloadTaskStatus.Downloading;
+        record.Pausing = false;
         record.ErrorMessage = null;
         _store.Upsert(record);
         OnChanged(record);
+        Trace("run " + record.TaskId + " (" + record.Kind + ")");
 
         try
         {
             await _executor.ExecuteAsync(record, progress, cts.Token).ConfigureAwait(false);
+            record.Pausing = false;
             record.Status = DownloadTaskStatus.Completed;
             record.Progress = 1;
             record.FinishedAt = DateTime.Now;
+            Trace("completed " + record.TaskId);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             // 只有"用户主动暂停/取消"才是 Paused;HttpClient 超时抛的 TaskCanceledException
             // 必须走 Failed,否则任务静默停在 3% —— 用户看到的就是"检测到了但从来不补全"。
+            record.Pausing = false;
             record.Status = DownloadTaskStatus.Paused;
+            Trace("paused " + record.TaskId);
         }
         catch (Exception ex)
         {
+            record.Pausing = false;
             record.Status = DownloadTaskStatus.Failed;
             record.ErrorMessage = ex.Message;
             record.FinishedAt = DateTime.Now;

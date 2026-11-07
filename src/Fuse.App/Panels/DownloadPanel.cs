@@ -205,6 +205,7 @@ public class DownloadPanel : UserControl
 
     private static string TaskStatusText(DownloadTaskRecord t)
     {
+        if (t.Pausing) return "暂停中…";
         switch (t.Status)
         {
             case DownloadTaskStatus.Queued: return "排队中";
@@ -230,7 +231,7 @@ public class DownloadPanel : UserControl
     };
 
     private static string TaskSignature(List<DownloadTaskRecord> tasks)
-        => string.Join("|", tasks.Select(t => t.TaskId + ":" + (int)t.Status));
+        => string.Join("|", tasks.Select(t => t.TaskId + ":" + (int)t.Status + (t.Pausing ? "p" : "")));
 
     private void BuildTaskList()
     {
@@ -403,11 +404,13 @@ public class DownloadPanel : UserControl
                 DownloadTaskStatus.Failed => ("重试", (Action)(() => AppServices.Queue?.Retry(task.TaskId))),
                 _ => ("", (Action)(() => { })),
             };
+            if (task.Pausing) label = "暂停中";
             if (label.Length > 0)
             {
                 action = new Button
                 {
                     Content = label,
+                    IsEnabled = !task.Pausing,
                     Style = (Style)Application.Current.Resources["ChipButton"],
                     Padding = new Thickness(10, 4, 10, 4),
                     Margin = new Thickness(0, 0, 6, 0),
@@ -416,6 +419,7 @@ public class DownloadPanel : UserControl
                 System.Windows.Automation.AutomationProperties.SetName(action, label + "任务 " + task.Name);
                 action.Click += (_, _) =>
                 {
+                    if (task.Pausing) return;
                     handler();
                     Rebuild();
                 };
