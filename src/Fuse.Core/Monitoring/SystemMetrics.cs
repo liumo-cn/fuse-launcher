@@ -12,6 +12,8 @@ public sealed class MetricsSample
 {
     public float CpuPercent { get; init; }
     public float GpuPercent { get; init; }
+    /// <summary>系统是否有可用的 GPU 3D 引擎计数器(区分"0%"和"读不到")。</summary>
+    public bool GpuAvailable { get; init; }
     /// <summary>已用物理内存(MB)。</summary>
     public long MemoryUsedMb { get; init; }
     /// <summary>物理内存总量(MB)。</summary>
@@ -50,13 +52,14 @@ public sealed class SystemMetrics : IDisposable
 
         var cpu = CpuPercent(ref _lastCpuTick, elapsed);
         var (memUsed, memTotal) = MemoryMb();
-        var gpu = GpuPercent();
+        var (gpu, gpuOk) = GpuPercent();
         var (down, up) = NetworkBps(elapsed);
 
         _last = new MetricsSample
         {
             CpuPercent = cpu,
             GpuPercent = gpu,
+            GpuAvailable = gpuOk,
             MemoryUsedMb = memUsed,
             MemoryTotalMb = memTotal,
             NetworkDownBps = down,
@@ -128,22 +131,9 @@ public sealed class SystemMetrics : IDisposable
         {
             if (_countersReady) return;
             _countersReady = true;
+            EnsureGpuCountersLocked(force: true);
             try
             {
-                var category = new PerformanceCounterCategory("GPU Engine");
-                foreach (var name in category.GetInstanceNames())
-                {
-                    // 只取 engtype_3D(游戏主要用 3D 引擎);跨引擎求和会超过 100%
-                    if (name.IndexOf("engtype_3D", StringComparison.OrdinalIgnoreCase) < 0) continue;
-                    try
-                    {
-                        var counter = new PerformanceCounter("GPU Engine", "Utilization Percentage", name + "\\utilization percentage");
-                        _gpuCounters.Add(counter);
-                    }
-                    catch (Exception)
-                    {
-                    }
-                }
                 var netCategory = new PerformanceCounterCategory("Network Interface");
                 foreach (var name in netCategory.GetInstanceNames())
                 {
@@ -165,21 +155,58 @@ public sealed class SystemMetrics : IDisposable
         }
     }
 
-    private float GpuPercent()
+    private DateTime _gpuRefreshedAt = DateTime.MinValue;
+
+    /// <summary>
+    /// GPU Engine 的实例随进程出现/消失,不能只枚举一次;每 30 秒或列表为空时重建。
+    /// 实例名必须原样传给 PerformanceCounter,不能再拼 "\utilization percentage"。
+    /// </summary>
+    private void EnsureGpuCountersLocked(bool force)
+    {
+        if (!force && _gpuCounters.Count > 0 &&
+            (DateTime.UtcNow - _gpuRefreshedAt).TotalSeconds < 30) return;
+        foreach (var c in _gpuCounters) c.Dispose();
+        _gpuCounters.Clear();
+        _gpuRefreshedAt = DateTime.UtcNow;
+        try
+        {
+            var category = new PerformanceCounterCategory("GPU Engine");
+            foreach (var name in category.GetInstanceNames())
+            {
+                // 只取 engtype_3D(游戏主要用 3D 引擎);跨引擎求和会超过 100%
+                if (name.IndexOf("engtype_3D", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                try
+                {
+                    _gpuCounters.Add(new PerformanceCounter("GPU Engine", "Utilization Percentage", name));
+                }
+                catch (Exception)
+                {
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // 类别缺失(老系统/精简系统):GPU 显示 --
+        }
+    }
+
+    private (float Percent, bool Available) GpuPercent()
     {
         try
         {
+            lock (_lock) EnsureGpuCountersLocked(force: false);
+            if (_gpuCounters.Count == 0) return (0f, false);
             var max = 0f;
             foreach (var counter in _gpuCounters)
             {
                 var value = counter.NextValue();
                 if (value > max) max = value;
             }
-            return max;
+            return (max, true);
         }
         catch (Exception)
         {
-            return 0f;
+            return (0f, false);
         }
     }
 

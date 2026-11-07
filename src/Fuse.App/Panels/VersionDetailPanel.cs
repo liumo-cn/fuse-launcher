@@ -12,6 +12,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Fuse.Core.Config;
+using Fuse.Core.Multiplayer;
 using Fuse.Core.Installer;
 using Fuse.Core.Java;
 using Fuse.Core.Sources;
@@ -64,6 +65,49 @@ public class VersionDetailPanel : UserControl
     private readonly Dictionary<string, string> _catByTab = new();
     private string _browseProjectType = "mod";   // Modrinth project_type
     private string _browseDestDir = "";          // 光影/材质落盘目录
+
+    // 内容下载状态(模组/光影/材质共用):打勾靠"记录 + 文件在磁盘",不靠内存
+    private sealed class ItemDownloadState
+    {
+        public string ProjectId = "";
+        public string Kind = "mod";
+        public string Source = "modrinth";
+        public string DestDir = "";
+        public string MainFileName = "";
+        public readonly HashSet<string> TaskIds = new(StringComparer.Ordinal);
+        /// <summary>本体任务:失败才算整个条目失败;前置失败只记日志。</summary>
+        public readonly HashSet<string> MainTaskIds = new(StringComparer.Ordinal);
+        public string Title = "";
+        public Button? Button;
+        public bool Failed;
+    }
+    private readonly Dictionary<string, ItemDownloadState> _itemDownloads =
+        new(StringComparer.Ordinal);
+    private FrameworkElement? _crashCard;
+    private FrameworkElement? _conflictCard;
+    private FrameworkElement? _multiplayerCard;
+    private MultiplayerHostSession? _mpSession;   // 联机会话(状态机见 MultiplayerHost.cs)
+    private TextBlock? _mpStatus;
+    private StackPanel? _mpStatusPanel;
+    private StackPanel? _mpRetryPanel;
+    private Fuse.App.Controls.Spinner? _mpSpinner;
+    private Border? _mpBadge;
+    private TextBlock? _mpBadgeText;
+    private StackPanel? _mpInvitePanel;
+    private TextBox? _mpInviteText;
+    private TextBox? _mpJoinBox;
+    private Button? _mpCopyButton;
+    private Button? _mpToggleButton;
+    private Action? _mpExpandAdvanced;
+    private bool _mpHadSuccess;
+    private TextBlock? _p2pStatus;
+    private TunnelRunner? _tunnel;
+    private TunnelPreset _tunnelPreset = TunnelPreset.SakuraFrp;
+    private TextBlock? _tunnelStatus;
+    private string? _missingBaseVersion;
+    private FrameworkElement? _playtimeCard;
+    private FrameworkElement? _jvmCard;
+    private FrameworkElement? _backupCard;
     private string[] _browseCategories = Categories;
     private string _localDirKind = "mods";       // 本地页当前目录
     private bool _shaderPrePending;              // 光影前置已入队(用于卡片状态)
@@ -133,6 +177,14 @@ public class VersionDetailPanel : UserControl
         Content = _root;
         BuildRoot();
         RenderTab();
+
+        if (AppServices.Queue != null)
+            AppServices.Queue.TaskChanged += OnDownloadTaskChanged;
+        Unloaded += (_, _) =>
+        {
+            if (AppServices.Queue != null)
+                AppServices.Queue.TaskChanged -= OnDownloadTaskChanged;
+        };
     }
 
     /// <summary>
@@ -173,6 +225,34 @@ public class VersionDetailPanel : UserControl
     private void DetectLoaderAndGameVersion()
     {
         _gameVersion = ResolveRootVersionId();
+
+        // 整合包继承的加载器版本可能被删/移走:此时 merge 会抛异常,loader 识别不出来。
+        // 先从 inheritsFrom 推断,保证模组/光影/材质页仍可用,并给出「补齐」入口。
+        try
+        {
+            var own = Path.Combine(VRoot(), _versionId, _versionId + ".json");
+            if (File.Exists(own))
+            {
+                var obj = JObject.Parse(File.ReadAllText(own));
+                var parent = obj.Value<string>("inheritsFrom");
+                if (!string.IsNullOrEmpty(parent) &&
+                    !File.Exists(Path.Combine(VRoot(), parent!, parent! + ".json")))
+                {
+                    _missingBaseVersion = parent;
+                    var parts = parent!.Split('-');
+                    if (parts.Length > 0) _gameVersion = parts[0];
+                    if (parts.Length > 1)
+                    {
+                        var kind = parts[1].ToLowerInvariant();
+                        if (kind is "forge" or "neoforge" or "fabric") _loader = kind;
+                    }
+                    return;
+                }
+            }
+        }
+        catch (Exception)
+        {
+        }
         try
         {
             // 加载器识别:用递归合并后的完整版本库列表判断。
@@ -305,6 +385,9 @@ public class VersionDetailPanel : UserControl
 
     private void BuildModifyTab()
     {
+        // 联机卡片置顶(测试功能,用户要求放最上面)
+        BuildMultiplayerSection();
+
         // 版本命名
         var nameCard = new Border
         {
@@ -475,7 +558,9 @@ public class VersionDetailPanel : UserControl
         BuildJvmArgsSection();
         BuildPlayStatsSection();
         BuildPackUpdateSection();
+        BuildMissingBaseSection();
         BuildCrashSection();
+        BuildModConflictSection();
         BuildBackupSection();
         BuildDeleteSection();
     }
@@ -572,13 +657,14 @@ public class VersionDetailPanel : UserControl
                     "将清除这个版本的累计时长/启动次数/崩溃次数和最近记录，无法恢复。", "清除", danger: true);
                 if (Show(confirm) != true) return;
                 AppServices.PlayStats.Clear(_versionId);
-                Toast("游玩统计已清除");
+                Toast("游玩统计已清除", _playtimeCard);
                 RenderTab();
             };
             host.Children.Add(clear);
         }
 
         card.Child = host;
+        _playtimeCard = card;
         _content.Children.Add(card);
     }
 
@@ -1064,12 +1150,13 @@ public class VersionDetailPanel : UserControl
             var text = box.Text.Trim();
             _profile.JvmArgs = text.Length == 0 ? null : text;
             AppServices.VersionProfiles.Set(_versionId, _profile);
-            Toast("JVM 参数已保存，下次启动生效");
+            Toast("JVM 参数已保存，下次启动生效", _jvmCard);
         };
         Grid.SetColumn(save, 1);
         row.Children.Add(save);
         host.Children.Add(row);
         card.Child = host;
+        _jvmCard = card;
         _content.Children.Add(card);
     }
 
@@ -1111,6 +1198,7 @@ public class VersionDetailPanel : UserControl
         host.Children.Add(wrap);
 
         card.Child = host;
+        _crashCard = card;
         _content.Children.Add(card);
     }
 
@@ -1132,17 +1220,17 @@ public class VersionDetailPanel : UserControl
     {
         try
         {
-            Toast("正在分析最近一次崩溃…");
+            Toast("正在分析最近一次崩溃…", _crashCard);
             var result = await Task.Run(() => CrashAnalyzer.Analyze(InstDir(), ModsDir()));
             if (result == null)
             {
-                Toast("没有找到崩溃报告或日志");
+                Toast("没有找到崩溃报告或日志", _crashCard);
                 return;
             }
             if (result.Suspects.Count == 0)
             {
                 OpenCrashFolder();
-                Toast("没有匹配到具体模组，已打开崩溃报告目录");
+                Toast("没有匹配到具体模组，已打开崩溃报告目录", _crashCard);
                 return;
             }
 
@@ -1153,12 +1241,12 @@ public class VersionDetailPanel : UserControl
                 "禁用这些模组", danger: true);
             if (Show(confirm) != true) return;
             var count = DisableMods(result.Suspects.Select(s => s.FilePath));
-            Toast("已禁用 " + count + " 个疑似模组");
+            Toast("已禁用 " + count + " 个疑似模组", _crashCard);
             RenderTab();
         }
         catch (Exception ex)
         {
-            Toast("分析失败:" + ex.Message);
+            Toast("分析失败:" + ex.Message, _crashCard);
         }
     }
 
@@ -1171,7 +1259,7 @@ public class VersionDetailPanel : UserControl
             : Array.Empty<string>();
         if (mods.Length == 0)
         {
-            Toast("没有启用中的模组");
+            Toast("没有启用中的模组", _crashCard);
             return;
         }
         var confirm = new ConfirmWindow("安全模式",
@@ -1180,7 +1268,7 @@ public class VersionDetailPanel : UserControl
             "全部禁用", danger: true);
         if (Show(confirm) != true) return;
         var count = DisableMods(mods);
-        Toast("已禁用 " + count + " 个模组");
+        Toast("已禁用 " + count + " 个模组", _crashCard);
         RenderTab();
     }
 
@@ -1247,7 +1335,7 @@ public class VersionDetailPanel : UserControl
         }
         catch (Exception ex)
         {
-            Toast("打开失败:" + ex.Message);
+            Toast("打开失败:" + ex.Message, _crashCard);
         }
     }
 
@@ -1266,20 +1354,1290 @@ public class VersionDetailPanel : UserControl
         var dir = Path.Combine(InstDir(), "crash-reports");
         if (!Directory.Exists(dir))
         {
-            Toast("还没有崩溃报告");
+            Toast("还没有崩溃报告", _crashCard);
             return;
         }
         var file = new DirectoryInfo(dir).GetFiles("*.txt")
             .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
         if (file == null)
         {
-            Toast("还没有崩溃报告");
+            Toast("还没有崩溃报告", _crashCard);
             return;
         }
         OpenLogViewer(file.FullName, "崩溃报告 · " + file.LastWriteTime.ToString("MM-dd HH:mm"));
     }
 
     // ---------- 备份 / 还原 / 复制实例 ----------
+
+
+
+    private void BuildMissingBaseSection()
+    {
+        if (string.IsNullOrEmpty(_missingBaseVersion)) return;
+        var card = new Border
+        {
+            Style = (Style)Application.Current.Resources["OptRow"],
+            Margin = new Thickness(0, 4, 0, 8),
+        };
+        var host = new StackPanel();
+        host.Children.Add(new TextBlock
+        {
+            Text = "基础版本缺失",
+            FontSize = 12.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["DangerBrush"],
+        });
+        host.Children.Add(new TextBlock
+        {
+            Text = "这个整合包继承自 " + _missingBaseVersion +
+                   "，但当前游戏目录里没有它。补齐后模组、光影、材质列表才能正常工作。",
+            FontSize = 11,
+            Foreground = T2,
+            Opacity = 0.8,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        var fix = new Button
+        {
+            Content = "补齐 " + _missingBaseVersion,
+            Style = (Style)Application.Current.Resources["ChipButton"],
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Height = 30,
+            Padding = new Thickness(14, 0, 14, 0),
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(fix, "补齐基础版本");
+        fix.Click += async (_, _) => await RepairMissingBaseAsync();
+        host.Children.Add(fix);
+        card.Child = host;
+        _content.Children.Add(card);
+    }
+
+    private async Task RepairMissingBaseAsync()
+    {
+        var parent = _missingBaseVersion;
+        if (string.IsNullOrEmpty(parent)) return;
+        try
+        {
+            var parts = parent!.Split('-');
+            var gameVersion = parts[0];
+            var kind = parts.Length > 1 ? parts[1].ToLowerInvariant() : "";
+            var loaderVersion = parts.Length > 2 ? string.Join("-", parts.Skip(2)) : "";
+            Toast("正在补齐基础版本 " + parent + "…", _conflictCard);
+
+            if (!File.Exists(Path.Combine(VRoot(), gameVersion, gameVersion + ".json")))
+            {
+                var vanillaMeta = Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    versionId = gameVersion,
+                    versionsRoot = VRoot(),
+                    librariesRoot = LibsRoot(),
+                    assetsRoot = AssetsRoot(),
+                    gameDirectory = InstDir(),
+                });
+                var v = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+                {
+                    Name = "Minecraft " + gameVersion + "（整合包底座）",
+                    Kind = "vanilla-install",
+                    Meta = vanillaMeta,
+                });
+                await WaitForInstallAsync(v.TaskId, "原版 " + gameVersion);
+            }
+
+            if (kind is "forge" or "neoforge" or "fabric")
+            {
+                var java = Fuse.Core.Java.JavaLocator.Pick(Fuse.Core.Java.JavaLocator.FindInstalled(), 17);
+                var loaderMeta = Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    gameVersion,
+                    mcVersion = gameVersion,
+                    loaderVersion,
+                    versionsRoot = VRoot(),
+                    librariesRoot = LibsRoot(),
+                    assetsRoot = AssetsRoot(),
+                    gameDirectory = InstDir(),
+                    javaHome = java?.Home,
+                });
+                var t = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+                {
+                    Name = gameVersion + " + " + kind + " " + loaderVersion,
+                    Kind = kind + "-install",
+                    Meta = loaderMeta,
+                });
+                await WaitForInstallAsync(t.TaskId, kind + " " + loaderVersion);
+            }
+
+            _missingBaseVersion = null;
+            DetectLoaderAndGameVersion();
+            Toast("基础版本已补齐", _conflictCard);
+            RenderTab();
+        }
+        catch (Exception ex)
+        {
+            Toast("补齐失败:" + ex.Message, _conflictCard);
+        }
+    }
+
+    private void BuildModConflictSection()
+    {
+        var card = new Border
+        {
+            Style = (Style)Application.Current.Resources["OptRow"],
+            Margin = new Thickness(0, 4, 0, 8),
+        };
+        var host = new StackPanel();
+        host.Children.Add(new TextBlock
+        {
+            Text = "模组冲突修复",
+            FontSize = 12.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = T2,
+        });
+        host.Children.Add(new TextBlock
+        {
+            // Forge/NeoForge 的模组元数据在 mods.toml，目前不解析。之前按 Fabric 规则硬判
+            // 会把整包模组当成"缺前置"，修一次反而删坏一次（zombie 整合包教训）。
+            Text = string.Equals(_loader, "fabric", StringComparison.OrdinalIgnoreCase)
+                ? "启动报 Incompatible mods 时，点这里自动分析缺前置/版本不匹配/重复安装，并给出一键修复。"
+                : "当前是 " + LoaderLabel() + " 实例：自动分析/修复目前只支持 Fabric（不解析 Forge 的 mods.toml，避免误删模组）。启动失败请用上面的「崩溃救援」。",
+            FontSize = 11,
+            Foreground = T2,
+            Opacity = 0.66,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        var analyze = new Button
+        {
+            Content = "分析并修复",
+            Style = (Style)Application.Current.Resources["ChipButton"],
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Height = 30,
+            Padding = new Thickness(14, 0, 14, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(analyze, "分析并修复模组冲突");
+        analyze.Click += async (_, _) => await AnalyzeAndFixModsAsync();
+        host.Children.Add(analyze);
+
+        var latestBackup = Fuse.Core.ModConflict.ModConflictFixer.LatestBackup(ModsDir());
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        host.Children.Remove(analyze);
+        analyze.Margin = new Thickness(0);
+        row.Children.Add(analyze);
+
+        if (!string.IsNullOrEmpty(latestBackup))
+        {
+            var undo = new Button
+            {
+                Content = "撤销上次修复",
+                Style = (Style)Application.Current.Resources["ChipButton"],
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Height = 30,
+                Padding = new Thickness(14, 0, 14, 0),
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(undo, "撤销上次模组修复");
+            undo.Click += (_, _) =>
+            {
+                var confirm = new ConfirmWindow("撤销修复",
+                    "将当前 mods 换回上一次修复前的备份？" + Environment.NewLine + Environment.NewLine +
+                    "备份：" + latestBackup, "撤销", danger: true);
+                confirm.Owner = Window.GetWindow(this);
+                if (Show(confirm) != true) return;
+                if (Fuse.Core.ModConflict.ModConflictFixer.RestoreBackup(ModsDir(), latestBackup!, out var error))
+                {
+                    Toast("已撤销修复", _conflictCard);
+                    RenderTab();
+                }
+                else Toast("撤销失败:" + error, _conflictCard);
+            };
+            row.Children.Add(undo);
+
+            var backups = new Button
+            {
+                Content = "查看备份",
+                Style = (Style)Application.Current.Resources["ChipButton"],
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Height = 30,
+                Padding = new Thickness(14, 0, 14, 0),
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(backups, "查看模组修复备份");
+            backups.Click += (_, _) =>
+            {
+                var window = new ModBackupsWindow(ModsDir())
+                {
+                    Owner = Window.GetWindow(this),
+                };
+                window.ShowDialog();
+                RenderTab();
+            };
+            row.Children.Add(backups);
+        }
+        host.Children.Add(row);
+
+        card.Child = host;
+        _conflictCard = card;
+        _content.Children.Add(card);
+    }
+
+    private string ReadRecentErrorText()
+    {
+        var sb = new System.Text.StringBuilder();
+        try
+        {
+            var crash = Path.Combine(InstDir(), "crash-reports");
+            if (Directory.Exists(crash))
+            {
+                var latest = new DirectoryInfo(crash).GetFiles("*.txt")
+                    .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
+                if (latest != null) sb.AppendLine(ReadTail(latest.FullName));
+            }
+            var log = Path.Combine(InstDir(), "logs", "latest.log");
+            if (File.Exists(log)) sb.AppendLine(ReadTail(log));
+        }
+        catch (Exception)
+        {
+        }
+        return sb.ToString();
+    }
+
+    private static string ReadTail(string path)
+    {
+        try
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            var take = (int)Math.Min(fs.Length, 256 * 1024);
+            fs.Seek(-take, SeekOrigin.End);
+            var buffer = new byte[take];
+            var read = fs.Read(buffer, 0, take);
+            return System.Text.Encoding.UTF8.GetString(buffer, 0, read);
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>
+    /// 一键切换游戏版本:安装目标 MC + 同版本加载器,复制模组/配置/存档到新实例,
+    /// 再按目标 MC 修一遍版本不兼容的模组。原实例保留。
+    /// </summary>
+    private async Task SwitchGameVersionAsync(string targetVersion)
+    {
+        if (!string.Equals(_loader, "fabric", StringComparison.OrdinalIgnoreCase))
+        {
+            new InfoWindow("切换游戏版本", "当前只支持 Fabric 实例的一键切换。").ShowDialog();
+            return;
+        }
+        try
+        {
+            WidgetWindow.Boot("[switch] begin target=" + targetVersion + " loader=" + _loader);
+            var merged = Core.Versioning.VersionJsonLoader.Load(VRoot(), _versionId);
+            var loaderName = merged.Libraries
+                .Select(l => l.Name)
+                .FirstOrDefault(n => n.StartsWith("net.fabricmc:fabric-loader:", StringComparison.OrdinalIgnoreCase));
+            var loaderVersion = loaderName?.Split(':').ElementAtOrDefault(2);
+            if (string.IsNullOrEmpty(loaderVersion))
+                throw new InvalidOperationException("识别不到当前实例的 Fabric Loader 版本");
+
+            var newId = targetVersion + "-fabric-" + loaderVersion;
+            var newInstance = AppServices.InstanceDirectoryIn(_gameRoot, newId);
+            Toast("正在安装 Minecraft " + targetVersion + "（" + newId + "）…", _conflictCard);
+
+            if (!File.Exists(Path.Combine(VRoot(), newId, newId + ".json")))
+            {
+                // 走下载队列(VanillaInstaller 直连 Mojang 在国内会卡死;队列带镜像/重试/续传)
+                var vanillaMeta = Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    versionId = targetVersion,
+                    versionsRoot = VRoot(),
+                    librariesRoot = LibsRoot(),
+                    assetsRoot = AssetsRoot(),
+                    gameDirectory = newInstance,
+                });
+                var vTask = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+                {
+                    Name = "Minecraft " + targetVersion + "（切换版本）",
+                    Kind = "vanilla-install",
+                    Meta = vanillaMeta,
+                });
+                await WaitForInstallAsync(vTask.TaskId, "原版 " + targetVersion);
+
+                var fabricMeta = Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    gameVersion = targetVersion,
+                    mcVersion = targetVersion,
+                    loaderVersion,
+                    versionsRoot = VRoot(),
+                    librariesRoot = LibsRoot(),
+                    assetsRoot = AssetsRoot(),
+                    gameDirectory = newInstance,
+                });
+                var fTask = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+                {
+                    Name = targetVersion + " + Fabric " + loaderVersion,
+                    Kind = "fabric-install",
+                    Meta = fabricMeta,
+                });
+                await WaitForInstallAsync(fTask.TaskId, "Fabric " + loaderVersion);
+            }
+
+            WidgetWindow.Boot("[switch] installed " + newId);
+            CopyInstanceData(InstDir(), newInstance);
+            Toast("正在按 " + targetVersion + " 修复模组…", _conflictCard);
+            var newMods = Path.Combine(newInstance, "mods");
+            var report = await Task.Run(() =>
+                Fuse.Core.ModConflict.ModConflictAnalyzer.Analyze(newMods, targetVersion, "fabric"));
+            var actions = report.Actions.Where(a => a.CanAutoFix).ToList();
+            if (actions.Count > 0)
+            {
+                await Fuse.Core.ModConflict.ModConflictFixer.ApplyAsync(
+                    newMods, targetVersion, "fabric", actions, AppServices.Http,
+                    new Progress<string>(msg => Toast(msg, _conflictCard)), CancellationToken.None);
+            }
+
+            new InfoWindow("已切换到 " + targetVersion,
+                "已创建版本：" + newId + Environment.NewLine +
+                "模组 / 配置 / 存档已复制到新实例；原实例保留未动。").ShowDialog();
+            var confirm = new ConfirmWindow("切换完成", "立即启动 " + newId + "？", "启动游戏")
+            {
+                Owner = Window.GetWindow(this),
+            };
+            if (Show(confirm) == true)
+                await AppLauncher.LaunchAsync(newId, _ => { });
+        }
+        catch (Exception ex)
+        {
+            WidgetWindow.Boot("[switch] failed: " + ex);
+            Toast("切换版本失败:" + ex.Message, _conflictCard);
+        }
+    }
+
+    private async Task WaitForInstallAsync(string taskId, string label)
+    {
+        var lastPct = -10;
+        while (true)
+        {
+            var record = AppServices.Queue?.GetTasks()?.FirstOrDefault(t => t.TaskId == taskId);
+            if (record == null) throw new InvalidOperationException(label + " 任务丢失");
+            var pct = (int)(record.Progress * 100);
+            if (pct >= lastPct + 10)
+            {
+                lastPct = pct;
+                Toast("正在安装 " + label + "：" + pct + "%", _conflictCard);
+            }
+            if (record.Status == Fuse.Core.Download.DownloadTaskStatus.Completed) return;
+            if (record.Status is Fuse.Core.Download.DownloadTaskStatus.Failed
+                or Fuse.Core.Download.DownloadTaskStatus.Removed)
+                throw new InvalidOperationException(label + " 安装失败：" + (record.ErrorMessage ?? "未知错误"));
+            await Task.Delay(1000);
+        }
+    }
+
+    private static void CopyInstanceData(string source, string dest)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (var name in new[]
+                 {
+                     "mods", "config", "saves", "resourcepacks", "shaderpacks",
+                     "shaders", "defaultconfigs", "CustomSkinLoader",
+                 })
+        {
+            var from = Path.Combine(source, name);
+            if (Directory.Exists(from)) CopyDirectory(from, Path.Combine(dest, name));
+        }
+        foreach (var name in new[] { "options.txt", "servers.dat" })
+        {
+            var from = Path.Combine(source, name);
+            if (File.Exists(from)) File.Copy(from, Path.Combine(dest, name), overwrite: true);
+        }
+    }
+
+    private static void CopyDirectory(string source, string dest)
+    {
+        Directory.CreateDirectory(dest);
+        foreach (var file in Directory.GetFiles(source))
+            File.Copy(file, Path.Combine(dest, Path.GetFileName(file)), overwrite: true);
+        foreach (var dir in Directory.GetDirectories(source))
+            CopyDirectory(dir, Path.Combine(dest, Path.GetFileName(dir)));
+    }
+
+    /// <summary>
+    /// 联机卡片:开放世界(UPnP/IPv6/局域网 + e4mc 捕获)+ 复制邀请 + 加入房间 + 一键装联机 Mod + frp 隧道。
+    /// 启动器不提供任何服务器;frp 只是托管用户自己账号的第三方客户端。
+    /// </summary>
+    /// <summary>
+    /// 联机卡片(小白友好版):首屏只放「创建房间 / 加入房间」两件事 + 状态机反馈。
+    /// 所有技术名词(直连/中转/备用组件/口令/中转网络)收进「高级联机选项」折叠区。
+    /// </summary>
+    private void BuildMultiplayerSection()
+    {
+        var card = new Border
+        {
+            Style = (Style)Application.Current.Resources["OptRow"],
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        var host = new StackPanel();
+
+        // 标题
+        var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
+        titleRow.Children.Add(new TextBlock
+        {
+            Text = "联机",
+            FontSize = 14,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        titleRow.Children.Add(new TextBlock
+        {
+            Text = "测试功能",
+            FontSize = 10.5,
+            Foreground = T3,
+            Opacity = 0.7,
+            Margin = new Thickness(8, 1, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        host.Children.Add(titleRow);
+        host.Children.Add(new TextBlock
+        {
+            Text = "一键创建房间，自动选择最佳网络。绝大多数情况下不需要任何设置。",
+            FontSize = 11.5,
+            Foreground = T2,
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
+        });
+
+        // ---------- 卡片 A:创建房间 ----------
+        var createCard = new Border
+        {
+            Background = (Brush)Application.Current.Resources["RowBgBrush"],
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 12, 0, 8),
+        };
+        var createHost = new StackPanel();
+        createHost.Children.Add(new TextBlock
+        {
+            Text = "创建房间",
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
+        });
+        createHost.Children.Add(new TextBlock
+        {
+            Text = "进入游戏建好世界后，点下面的按钮生成邀请。",
+            FontSize = 11.5,
+            Foreground = T2,
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        _mpToggleButton = new Button
+        {
+            Content = "创建房间",
+            Style = (Style)Application.Current.Resources["GreenBigButton"],
+            Height = 44,
+            Margin = new Thickness(0, 10, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(_mpToggleButton, "创建房间");
+        _mpToggleButton.Click += async (_, _) => await ToggleHostAsync();
+        createHost.Children.Add(_mpToggleButton);
+
+        // 创建成功后的邀请行
+        _mpInvitePanel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 10, 0, 0) };
+        _mpInvitePanel.Children.Add(new TextBlock
+        {
+            Text = "房间已创建，把邀请发给朋友：",
+            FontSize = 11.5,
+            Foreground = T2,
+            Opacity = 0.7,
+        });
+        _mpInviteText = new TextBox
+        {
+            Style = (Style)Application.Current.Resources["DarkInput"],
+            FontSize = 11,
+            Height = 32,
+            IsReadOnly = true,
+            Margin = new Thickness(0, 6, 0, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(_mpInviteText, "房间邀请链接");
+        _mpInvitePanel.Children.Add(_mpInviteText);
+        _mpCopyButton = new Button
+        {
+            Content = "复制邀请",
+            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
+            Height = 44,
+            Margin = new Thickness(0, 8, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(_mpCopyButton, "复制邀请");
+        _mpCopyButton.Click += (_, _) => CopyInvite();
+        _mpInvitePanel.Children.Add(_mpCopyButton);
+        createHost.Children.Add(_mpInvitePanel);
+        createCard.Child = createHost;
+        host.Children.Add(createCard);
+
+        // ---------- 卡片 B:加入房间 ----------
+        var joinCard = new Border
+        {
+            Background = (Brush)Application.Current.Resources["RowBgBrush"],
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(12),
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        var joinHost = new StackPanel();
+        joinHost.Children.Add(new TextBlock
+        {
+            Text = "加入房间",
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
+        });
+        joinHost.Children.Add(new TextBlock
+        {
+            Text = "把朋友发来的邀请粘贴到这里。",
+            FontSize = 11.5,
+            Foreground = T2,
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        _mpJoinBox = new TextBox
+        {
+            Style = (Style)Application.Current.Resources["DarkInput"],
+            FontSize = 12,
+            Height = 44,
+            Margin = new Thickness(0, 10, 0, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(_mpJoinBox, "房间邀请输入");
+        joinHost.Children.Add(_mpJoinBox);
+        var joinButton = new Button
+        {
+            Content = "加入房间",
+            Style = (Style)Application.Current.Resources["GreenBigButton"],
+            Height = 44,
+            Margin = new Thickness(0, 8, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(joinButton, "加入房间");
+        joinButton.Click += (_, _) => JoinRoomFromBox();
+        joinHost.Children.Add(joinButton);
+        joinCard.Child = joinHost;
+        host.Children.Add(joinCard);
+
+        // ---------- 状态反馈区 ----------
+        _mpStatusPanel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(2, 2, 2, 0) };
+        var statusRow = new StackPanel { Orientation = Orientation.Horizontal };
+        _mpSpinner = new Fuse.App.Controls.Spinner((Brush)Application.Current.Resources["AccentTextBrush"]);
+        _mpSpinner.Margin = new Thickness(0, 0, 8, 0);
+        _mpSpinner.VerticalAlignment = VerticalAlignment.Center;
+        _mpSpinner.Visibility = Visibility.Collapsed;
+        statusRow.Children.Add(_mpSpinner);
+        _mpBadge = new Border
+        {
+            Background = (Brush)Application.Current.Resources["AccentChipBrush"],
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(8, 2, 8, 2),
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed,
+        };
+        _mpBadgeText = new TextBlock
+        {
+            Text = "直连",
+            FontSize = 10.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Brushes.White,
+        };
+        _mpBadge.Child = _mpBadgeText;
+        statusRow.Children.Add(_mpBadge);
+        _mpStatus = new TextBlock
+        {
+            FontSize = 11.5,
+            Foreground = T2,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        statusRow.Children.Add(_mpStatus);
+        _mpStatusPanel.Children.Add(statusRow);
+
+        _mpRetryPanel = new StackPanel { Orientation = Orientation.Horizontal, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 8, 0, 0) };
+        var retry = new Button
+        {
+            Content = "重试",
+            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
+            Height = 44,
+            Padding = new Thickness(18, 0, 18, 0),
+            Margin = new Thickness(0, 0, 10, 0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(retry, "重试联机");
+        retry.Click += async (_, _) => await ToggleHostAsync();
+        _mpRetryPanel.Children.Add(retry);
+        var backup = new Button
+        {
+            Content = "尝试备用方案",
+            Style = (Style)Application.Current.Resources["FlatRowButton"],
+            Height = 44,
+            Padding = new Thickness(6, 0, 6, 0),
+            Foreground = (Brush)Application.Current.Resources["AccentTextBrush"],
+        };
+        System.Windows.Automation.AutomationProperties.SetName(backup, "尝试备用方案");
+        backup.Click += (_, _) => _mpExpandAdvanced?.Invoke();
+        _mpRetryPanel.Children.Add(backup);
+        _mpStatusPanel.Children.Add(_mpRetryPanel);
+        host.Children.Add(_mpStatusPanel);
+
+        // ---------- 高级选项(默认收起) ----------
+        var advancedOptions = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 2, 0, 0) };
+        BuildAdvancedMultiplayerOptions(advancedOptions);
+        var advHeader = new Grid { Background = Brushes.Transparent };
+        advHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        advHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        advHeader.Children.Add(new TextBlock
+        {
+            Text = "高级联机选项（连不上再点这里）",
+            FontSize = 11.5,
+            Foreground = T3,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var advChev = new TextBlock
+        {
+            Text = "▾", FontSize = 11, Foreground = T3, VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(advChev, 1);
+        advHeader.Children.Add(advChev);
+        var advButton = new Button
+        {
+            Style = (Style)Application.Current.Resources["FlatRowButton"],
+            Content = advHeader,
+            Padding = new Thickness(6, 8, 6, 8),
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(advButton, "高级联机选项");
+        var advOpen = false;
+        Action toggleAdv = () =>
+        {
+            advOpen = !advOpen;
+            advancedOptions.Visibility = advOpen ? Visibility.Visible : Visibility.Collapsed;
+            advChev.Text = advOpen ? "▴" : "▾";
+        };
+        advButton.Click += (_, _) => toggleAdv();
+        _mpExpandAdvanced = () =>
+        {
+            if (!advOpen) toggleAdv();
+        };
+        host.Children.Add(advButton);
+        host.Children.Add(advancedOptions);
+
+        card.Child = host;
+        _multiplayerCard = card;
+        _content.Children.Add(card);
+    }
+
+    /// <summary>高级联机选项:保留全部旧功能,只是收进折叠区并换成人类语言。</summary>
+    private void BuildAdvancedMultiplayerOptions(StackPanel options)
+    {
+        // 1. 备用联机组件
+        options.Children.Add(SectionLabel("备用联机组件"));
+        options.Children.Add(SectionHint("自动连接失败时，可以安装备用组件再试一次。"));
+        var modRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        var e4mc = new Button
+        {
+            Content = "安装 e4mc",
+            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
+            Height = 44,
+            Padding = new Thickness(14, 0, 14, 0),
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(e4mc, "安装 e4mc");
+        e4mc.Click += (_, _) => InstallMultiplayerMod(new[] { "e4mc" }, "e4mc");
+        modRow.Children.Add(e4mc);
+        var lan = new Button
+        {
+            Content = "安装简单联机",
+            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
+            Height = 44,
+            Padding = new Thickness(14, 0, 14, 0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(lan, "安装简单联机");
+        lan.Click += (_, _) => InstallMultiplayerMod(new[] { "lan-server-properties", "custom-lan" }, "简单联机");
+        modRow.Children.Add(lan);
+        options.Children.Add(modRow);
+
+        // 2. 口令直连
+        options.Children.Add(SectionLabel("口令直连", top: 16));
+        options.Children.Add(SectionHint("如果你拿到了好友发来的连接口令，可以粘贴到这里。"));
+        var p2pBox = new TextBox
+        {
+            Style = (Style)Application.Current.Resources["DarkInput"],
+            FontSize = 11.5,
+            Height = 44,
+            Margin = new Thickness(0, 8, 0, 0),
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(p2pBox, "好友口令");
+        options.Children.Add(p2pBox);
+        var p2pBtn = new Button
+        {
+            Content = "通过口令直连",
+            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
+            Height = 44,
+            Margin = new Thickness(0, 8, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(p2pBtn, "通过口令直连");
+        p2pBtn.Click += (_, _) =>
+        {
+            var answer = p2pBox.Text.Trim();
+            if (answer.Length == 0)
+            {
+                Toast("先把好友发来的口令粘进来", _multiplayerCard);
+                return;
+            }
+            if (_p2pStatus != null) _p2pStatus.Text = "正在通过口令连接…";
+            _ = Task.Run(async () =>
+            {
+                var ok = await (_mpSession?.AcceptFuseLinkAnswerAsync(answer) ?? Task.FromResult(false));
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_p2pStatus != null && ok) _p2pStatus.Text = "口令连接成功，好友可以进房间了";
+                }));
+            });
+        };
+        options.Children.Add(p2pBtn);
+        _p2pStatus = new TextBlock
+        {
+            FontSize = 10.5,
+            Foreground = T3,
+            Margin = new Thickness(0, 6, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        };
+        options.Children.Add(_p2pStatus);
+
+        // 3. 自建中转网络(FRP)
+        options.Children.Add(SectionLabel("自建中转网络（FRP）", top: 16));
+        options.Children.Add(SectionHint("需要一点网络基础，适合怎么都连不上时手动搭建中转。"));
+        var presetRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        foreach (var preset in new[] { TunnelPreset.SakuraFrp, TunnelPreset.OpenFrp })
+        {
+            var chip = new Button
+            {
+                Content = preset.Id == "sakura" ? "樱花内网穿透" : "OpenFrp / 自建",
+                Style = (Style)Application.Current.Resources["ChipButton"],
+                Height = 44,
+                Padding = new Thickness(12, 0, 12, 0),
+                Margin = new Thickness(0, 0, 8, 0),
+            };
+            var captured = preset;
+            if (preset.Id == _tunnelPreset.Id)
+                chip.Background = (Brush)Application.Current.Resources["AccentChipBrush"];
+            chip.Click += (_, _) =>
+            {
+                _tunnelPreset = captured;
+                foreach (var other in presetRow.Children.OfType<Button>())
+                    other.Background = null;
+                chip.Background = (Brush)Application.Current.Resources["AccentChipBrush"];
+            };
+            presetRow.Children.Add(chip);
+        }
+        options.Children.Add(presetRow);
+
+        options.Children.Add(FieldLabel("frpc 路径"));
+        var exeRow = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        exeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        exeRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var exeBox = new TextBox
+        {
+            Style = (Style)Application.Current.Resources["DarkInput"],
+            FontSize = 11,
+            Height = 44,
+            VerticalContentAlignment = VerticalAlignment.Center,
+            Text = _tunnelExePath ?? "",
+        };
+        exeBox.TextChanged += (_, _) => _tunnelExePath = exeBox.Text.Trim();
+        Grid.SetColumn(exeBox, 0);
+        exeRow.Children.Add(exeBox);
+        var browse = new Button
+        {
+            Content = "选择 frpc 路径",
+            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
+            Height = 44,
+            Padding = new Thickness(12, 0, 12, 0),
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(browse, "选择 frpc 路径");
+        browse.Click += (_, _) =>
+        {
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "选择 frpc.exe（平台官网下载）",
+                Filter = "frpc (frpc.exe)|frpc*.exe|所有程序 (*.exe)|*.exe",
+            };
+            if (dialog.ShowDialog() == true)
+            {
+                exeBox.Text = dialog.FileName;
+                _tunnelExePath = dialog.FileName;
+            }
+        };
+        Grid.SetColumn(browse, 1);
+        exeRow.Children.Add(browse);
+        options.Children.Add(exeRow);
+
+        options.Children.Add(FieldLabel("访问密钥，或直接粘贴平台生成的配置文本", top: 10));
+        var keyBox = new TextBox
+        {
+            Style = (Style)Application.Current.Resources["DarkInput"],
+            FontSize = 11,
+            Height = 56,
+            Margin = new Thickness(0, 6, 0, 0),
+            AcceptsReturn = true,
+            TextWrapping = TextWrapping.NoWrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(keyBox, "中转密钥或配置");
+        options.Children.Add(keyBox);
+
+        options.Children.Add(FieldLabel("中转地址（平台面板里显示的）", top: 10));
+        var remoteRow = new Grid { Margin = new Thickness(0, 6, 0, 0) };
+        remoteRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        remoteRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var remoteBox = new TextBox
+        {
+            Style = (Style)Application.Current.Resources["DarkInput"],
+            FontSize = 11,
+            Height = 44,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(remoteBox, "中转地址");
+        Grid.SetColumn(remoteBox, 0);
+        remoteRow.Children.Add(remoteBox);
+        var startTunnel = new Button
+        {
+            Content = "启动隧道",
+            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
+            Height = 44,
+            Padding = new Thickness(14, 0, 14, 0),
+            Margin = new Thickness(8, 0, 0, 0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(startTunnel, "启动隧道");
+        startTunnel.Click += (_, _) => StartTunnel(keyBox.Text, remoteBox.Text.Trim());
+        Grid.SetColumn(startTunnel, 1);
+        remoteRow.Children.Add(startTunnel);
+        options.Children.Add(remoteRow);
+
+        _tunnelStatus = new TextBlock
+        {
+            Text = "隧道未启动",
+            FontSize = 10.5,
+            Foreground = T3,
+            Margin = new Thickness(0, 6, 0, 0),
+            TextWrapping = TextWrapping.Wrap,
+        };
+        options.Children.Add(_tunnelStatus);
+    }
+
+    private static TextBlock FieldLabel(string text, double top = 10) => new()
+    {
+        Text = text,
+        FontSize = 10.5,
+        Foreground = T2,
+        Opacity = 0.85,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(0, top, 0, 0),
+    };
+
+    private static TextBlock SectionLabel(string text, double top = 0) => new()
+    {
+        Text = text,
+        FontSize = 12,
+        FontWeight = FontWeights.SemiBold,
+        Foreground = T2,
+        Margin = new Thickness(0, top, 0, 0),
+    };
+
+    private static TextBlock SectionHint(string text) => new()
+    {
+        Text = text,
+        FontSize = 10.5,
+        Foreground = T3,
+        TextWrapping = TextWrapping.Wrap,
+        Margin = new Thickness(0, 3, 0, 0),
+    };
+
+    /// <summary>首屏状态机:加载动画 → 直连/中转徽章 → 失败重试。技术细节只进折叠区。</summary>
+    private void ApplyMpState(MultiplayerHostState state)
+    {
+        if (_mpStatusPanel == null || _mpStatus == null) return;
+        var running = state.Phase is "Launching" or "WaitingLan" or "Probing";
+        if (state.Phase is "Idle")
+        {
+            _mpStatusPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+        _mpStatusPanel.Visibility = Visibility.Visible;
+
+        if (running)
+        {
+            _mpSpinner!.Visibility = Visibility.Visible;
+            _mpSpinner.Start();
+            _mpBadge!.Visibility = Visibility.Collapsed;
+            _mpRetryPanel!.Visibility = Visibility.Collapsed;
+            _mpStatus.Text = "正在寻找最佳连接方式…";
+            _mpStatus.Foreground = T2;
+            if (_mpInvitePanel != null) _mpInvitePanel.Visibility = Visibility.Collapsed;
+            if (_mpToggleButton != null)
+            {
+                _mpToggleButton.Content = "关闭房间";
+                System.Windows.Automation.AutomationProperties.SetName(_mpToggleButton, "关闭房间");
+            }
+            return;
+        }
+
+        _mpSpinner?.Stop();
+        if (_mpSpinner != null) _mpSpinner.Visibility = Visibility.Collapsed;
+
+        if (state.Phase == "Ready")
+        {
+            _mpHadSuccess = true;
+            _mpRetryPanel!.Visibility = Visibility.Collapsed;
+            _mpStatus.Foreground = T2;
+            var direct = state.ChannelKind is not ("frp" or "mod");
+            if (direct)
+            {
+                _mpBadgeText!.Text = "直连";
+                _mpBadge!.Background = (Brush)Application.Current.Resources["AccentChipBrush"];
+                _mpStatus.Text = "连接成功，延迟较低。";
+            }
+            else
+            {
+                _mpBadgeText!.Text = "中转";
+                _mpBadge!.Background = new SolidColorBrush(Color.FromArgb(255, 70, 90, 120));
+                _mpStatus.Text = "已通过中转连接。";
+            }
+            _mpBadge.Visibility = Visibility.Visible;
+            if (_mpInvitePanel != null)
+                _mpInvitePanel.Visibility = string.IsNullOrEmpty(state.InviteLink) ? Visibility.Collapsed : Visibility.Visible;
+            if (_mpInviteText != null) _mpInviteText.Text = state.InviteLink ?? "";
+            if (_mpCopyButton != null) _mpCopyButton.IsEnabled = state.InviteLink != null;
+            if (_mpToggleButton != null)
+            {
+                _mpToggleButton.Content = "关闭房间";
+                System.Windows.Automation.AutomationProperties.SetName(_mpToggleButton, "关闭房间");
+            }
+            return;
+        }
+
+        // Closed
+        if (_mpInvitePanel != null) _mpInvitePanel.Visibility = Visibility.Collapsed;
+        if (_mpToggleButton != null)
+        {
+            _mpToggleButton.Content = "创建房间";
+            System.Windows.Automation.AutomationProperties.SetName(_mpToggleButton, "创建房间");
+        }
+        _mpBadge?.SetCurrentValue(VisibilityProperty, Visibility.Collapsed);
+        _mpStatusPanel.Visibility = Visibility.Visible;
+        if (_mpHadSuccess)
+        {
+            _mpRetryPanel!.Visibility = Visibility.Collapsed;
+            _mpStatus.Text = "房间已关闭。";
+            _mpStatus.Foreground = T2;
+        }
+        else
+        {
+            _mpRetryPanel!.Visibility = Visibility.Visible;
+            _mpStatus.Text = "自动连接失败，可能受网络限制。";
+            _mpStatus.Foreground = T2;
+        }
+    }
+
+    private void CopyInvite()
+    {
+        var invite = _mpSession?.Current.InviteLink;
+        if (string.IsNullOrEmpty(invite))
+        {
+            Toast("房间还没创建好，稍等一下", _multiplayerCard);
+            return;
+        }
+        Clipboard.SetText(invite);
+        Toast("邀请已复制，发给朋友就行", _multiplayerCard);
+    }
+
+    private void JoinRoomFromBox()
+    {
+        var text = _mpJoinBox?.Text.Trim() ?? "";
+        if (text.Length == 0)
+        {
+            Toast("先把朋友发来的邀请粘贴进来", _multiplayerCard);
+            return;
+        }
+        MultiplayerJoinWindow.ShowForInvite(text);
+    }
+
+    private string? _tunnelExePath;
+
+
+    private async Task ToggleHostAsync()
+    {
+        if (_mpSession?.IsRunning == true)
+        {
+            _mpSession.CloseByUser();
+            _mpSession.Dispose();
+            _mpSession = null;
+            _tunnel?.Stop();
+            _mpSpinner?.Stop();
+            if (_mpSpinner != null) _mpSpinner.Visibility = Visibility.Collapsed;
+            if (_mpBadge != null) _mpBadge.Visibility = Visibility.Collapsed;
+            if (_mpRetryPanel != null) _mpRetryPanel.Visibility = Visibility.Collapsed;
+            if (_mpInvitePanel != null) _mpInvitePanel.Visibility = Visibility.Collapsed;
+            if (_mpStatusPanel != null) _mpStatusPanel.Visibility = Visibility.Visible;
+            if (_mpStatus != null) _mpStatus.Text = "房间已关闭。";
+            if (_mpToggleButton != null)
+            {
+                _mpToggleButton.Content = "创建房间";
+                System.Windows.Automation.AutomationProperties.SetName(_mpToggleButton, "创建房间");
+            }
+            if (_mpCopyButton != null) _mpCopyButton.IsEnabled = false;
+            return;
+        }
+
+        var gameRunning = LaunchState.IsBusy(_versionId);
+        if (!gameRunning)
+        {
+            var confirm = new ConfirmWindow("创建房间",
+                "会先启动 " + _versionId + "。进入世界后，回来点一次「创建房间」就能生成邀请。", "启动游戏")
+            { Owner = Window.GetWindow(this) };
+            if (confirm.ShowDialog() != true) return;
+        }
+
+        _mpSession?.Dispose();
+        _mpHadSuccess = false;
+        _mpSession = new MultiplayerHostSession(_versionId, RootDir());
+        _mpSession.StateChanged += state => Dispatcher.BeginInvoke(new Action(() => ApplyMpState(state)));
+        _mpSession.P2pStatus += msg => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            // 口令/P2P 属于高级功能:状态只进折叠区,不污染首屏
+            if (_p2pStatus != null) _p2pStatus.Text = msg;
+        }));
+        _ = _mpSession.RunAsync(CancellationToken.None);
+
+        if (!gameRunning)
+        {
+            try
+            {
+                await AppLauncher.LaunchAsync(_versionId, msg => Toast(msg, _multiplayerCard));
+            }
+            catch (Exception ex)
+            {
+                Toast("启动失败:" + ex.Message, _multiplayerCard);
+            }
+        }
+    }
+
+    /// <summary>一键装联机 Mod:按 slug 候选逐个找当前 MC/加载器可用版本,复用模组安装管线(含前置)。</summary>
+    private void InstallMultiplayerMod(string[] slugs, string label)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                Fuse.Core.Installer.ModInstallPlan? plan = null;
+                string? used = null;
+                foreach (var slug in slugs)
+                {
+                    try
+                    {
+                        plan = await Fuse.Core.Installer.ModInstaller.PlanAsync(
+                            AppServices.Http, slug, _gameVersion, _loader, ModsDir(),
+                            CancellationToken.None).ConfigureAwait(false);
+                        used = slug;
+                        break;
+                    }
+                    catch (Exception)
+                    {
+                        // 换下一个候选
+                    }
+                }
+                if (plan == null || used == null)
+                    throw new InvalidOperationException("没有找到适配 " + _gameVersion + " / " + _loader + " 的版本");
+
+                foreach (var item in plan.Items)
+                {
+                    var task = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+                    {
+                        Name = System.IO.Path.GetFileName(item.DestPath),
+                        Kind = "file",
+                        SourceUrl = item.Url,
+                        DestPath = item.DestPath,
+                        ExpectedHash = item.ExpectedHash,
+                    });
+                    DownloadFocus.Register(task.TaskId, "version-detail");
+                }
+                Dispatcher.BeginInvoke(new Action(() =>
+                    Toast("已开始下载 " + label + "(" + plan.Items.Count + " 个文件,装完重开世界)", _multiplayerCard)));
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                    Toast("装 " + label + " 失败:" + ex.Message, _multiplayerCard)));
+            }
+        });
+    }
+
+    private void StartTunnel(string keyOrConfig, string remoteAddress)
+    {
+        if (_tunnelStatus == null) return;
+        if (string.IsNullOrWhiteSpace(_tunnelExePath) || !System.IO.File.Exists(_tunnelExePath))
+        {
+            Toast("先选 frpc.exe(平台官网下载)", _multiplayerCard);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(keyOrConfig))
+        {
+            Toast("填访问密钥:隧道ID(樱花)或面板配置文本(OpenFrp)", _multiplayerCard);
+            return;
+        }
+
+        _tunnel?.Stop();
+        _tunnel = new TunnelRunner(_tunnelPreset, _tunnelExePath);
+        var localPort = _mpSession?.LanPort?.Port ?? 25565;
+        _tunnel.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (_tunnelStatus == null) return;
+            _tunnelStatus.Text = status switch
+            {
+                TunnelStatus.Starting => "隧道启动中…(看 frpc 输出确认)",
+                TunnelStatus.Connected => "隧道已连通!邀请地址:" + (string.IsNullOrWhiteSpace(remoteAddress) ? "(在「远端地址」里填面板给的地址)" : remoteAddress),
+                TunnelStatus.Failed => "隧道失败:" + (_tunnel.LastError ?? "未知"),
+                TunnelStatus.Exited => "隧道已退出",
+                _ => "隧道未启动",
+            };
+            if (status == TunnelStatus.Connected && !string.IsNullOrWhiteSpace(remoteAddress))
+            {
+                _mpSession?.SetTunnelAddress(remoteAddress);
+            }
+        }));
+        var ok = _tunnel.Start(keyOrConfig, localPort);
+        if (!ok)
+            _tunnelStatus.Text = "隧道启动失败:" + _tunnel.LastError;
+    }
+
+    /// <summary>加入房间:粘贴邀请码/链接/裸地址 → 复用好友邀请窗。</summary>
+    private void ShowJoinDialog()
+    {
+        var stack = new StackPanel();
+        var head = DialogKit.Title("加入好友房间");
+        stack.Children.Add(head);
+        stack.Children.Add(new TextBlock
+        {
+            Text = "粘贴好友发来的邀请(点过的链接 / fuse-launcher://… / 裸地址 均可)",
+            FontSize = 11.5,
+            Foreground = DialogKit.Res("TextSecondaryBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 8, 0, 8),
+        });
+        var box = new TextBox
+        {
+            Style = (Style)Application.Current.Resources["DarkInput"],
+            FontSize = 12,
+            AcceptsReturn = true,
+            Height = 64,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(box, "邀请码输入");
+        stack.Children.Add(box);
+        stack.Children.Add(DialogKit.Buttons(
+            DialogKit.Primary("下一步", () =>
+            {
+                var text = box.Text.Trim();
+                if (text.Length == 0) return;
+                MultiplayerJoinWindow.ShowForInvite(text);
+            }),
+            DialogKit.Secondary("取消", () => { })));
+        var window = new Window
+        {
+            Width = 420,
+            SizeToContent = SizeToContent.Height,
+            WindowStyle = WindowStyle.None,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            AllowsTransparency = true,
+            Background = System.Windows.Media.Brushes.Transparent,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Topmost = true,
+            Content = DialogKit.Card(stack),
+        };
+        window.Owner = Window.GetWindow(this);
+        DialogKit.WireDrag(window, head);
+        DialogKit.WireKeys(window, () => window.DialogResult = false);
+        window.ShowDialog();
+    }
+
+    private async Task AnalyzeAndFixModsAsync()
+    {
+        try
+        {
+            // 只对 Fabric 做自动修复。Forge/NeoForge 的模组元数据不在 fabric.mod.json,
+            // 强行分析会把正常模组全判成"缺前置",修一次坏一次。
+            if (!string.Equals(_loader, "fabric", StringComparison.OrdinalIgnoreCase))
+            {
+                new InfoWindow("暂不支持自动修复",
+                    "当前是 " + LoaderLabel() + " 实例。" + Environment.NewLine + Environment.NewLine +
+                    "自动分析/修复目前只支持 Fabric 模组：Forge / NeoForge 的依赖写在 mods.toml 里，" +
+                    "按 Fabric 规则判断会误删正常模组。" + Environment.NewLine + Environment.NewLine +
+                    "启动失败可以先用「崩溃救援」查看日志、进安全模式排查。")
+                { Owner = Window.GetWindow(this) }.ShowDialog();
+                return;
+            }
+
+            var errorText = ReadRecentErrorText();
+            var report = await Task.Run(() =>
+                Fuse.Core.ModConflict.ModConflictAnalyzer.Analyze(ModsDir(), _gameVersion, _loader, errorText));
+            if (!report.HasProblems)
+            {
+                Toast("没有发现模组冲突", _conflictCard);
+                return;
+            }
+
+            var dialog = new ModConflictWindow(report, _loader) { Owner = Window.GetWindow(this) };
+            if (dialog.ShowDialog() != true) return;
+            if (dialog.SwitchGameVersion)
+            {
+                await SwitchGameVersionAsync(report.SuggestedGameVersion!);
+                return;
+            }
+            if (dialog.Selected.Count == 0) return;
+
+            Toast("正在修复 " + dialog.Selected.Count + " 项…", _conflictCard);
+            var outcome = await Fuse.Core.ModConflict.ModConflictFixer.ApplyAsync(
+                ModsDir(), _gameVersion, _loader, dialog.Selected, AppServices.Http,
+                new Progress<string>(msg => Dispatcher.BeginInvoke(new Action(() => Toast(msg, _conflictCard)))),
+                CancellationToken.None);
+
+            var message = outcome.Applied.Count + " 项已修复";
+            if (outcome.Failed.Count > 0)
+                message += "\n\n未完成：\n· " + string.Join("\n· ", outcome.Failed);
+            if (outcome.BackupCreated)
+                message += "\n\n旧文件已备份到：\n" + outcome.BackupDirectory;
+            new InfoWindow("模组冲突修复", message) { Owner = Window.GetWindow(this) }.ShowDialog();
+            RenderTab();
+        }
+        catch (Exception ex)
+        {
+            Toast("修复失败:" + ex.Message, _conflictCard);
+        }
+    }
 
     private void BuildBackupSection()
     {
@@ -1309,6 +2667,7 @@ public class VersionDetailPanel : UserControl
                 Margin = new Thickness(0, 6, 0, 0),
             });
             card.Child = host;
+            _backupCard = card;
             _content.Children.Add(card);
             return;
         }
@@ -1445,7 +2804,52 @@ public class VersionDetailPanel : UserControl
             host.Children.Add(scroll);
         }
 
+        // 与「模组冲突修复」的备份联动:只换 mods/ 的备份也在这里给入口
+        try
+        {
+            var modBackups = Directory.Exists(InstDir())
+                ? Directory.GetDirectories(InstDir(), "mods-backup-*")
+                : Array.Empty<string>();
+            if (modBackups.Length > 0)
+            {
+                var linkRow = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Margin = new Thickness(0, 8, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                linkRow.Children.Add(new TextBlock
+                {
+                    Text = "模组修复备份（" + modBackups.Length + " 个）",
+                    FontSize = 11,
+                    Foreground = T2,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 8, 0),
+                });
+                var view = new Button
+                {
+                    Content = "查看",
+                    Style = (Style)Application.Current.Resources["ChipButton"],
+                    Padding = new Thickness(10, 4, 10, 4),
+                    VerticalAlignment = VerticalAlignment.Center,
+                };
+                System.Windows.Automation.AutomationProperties.SetName(view, "查看模组修复备份");
+                view.Click += (_, _) =>
+                {
+                    var window = new ModBackupsWindow(ModsDir()) { Owner = Window.GetWindow(this) };
+                    window.ShowDialog();
+                    RenderTab();
+                };
+                linkRow.Children.Add(view);
+                host.Children.Add(linkRow);
+            }
+        }
+        catch (Exception)
+        {
+        }
+
         card.Child = host;
+        _backupCard = card;
         _content.Children.Add(card);
     }
 
@@ -1460,11 +2864,11 @@ public class VersionDetailPanel : UserControl
                 RootDir(), VRoot(), InstDir(), _versionId,
                 _profile.DisplayName ?? _versionId));
             WidgetWindow.Boot("[backup] created " + path);
-            Toast("备份完成:" + Path.GetFileName(path));
+            Toast("备份完成:" + Path.GetFileName(path), _backupCard);
         }
         catch (Exception ex)
         {
-            Toast("备份失败:" + ex.Message);
+            Toast("备份失败:" + ex.Message, _backupCard);
         }
         finally
         {
@@ -1487,11 +2891,11 @@ public class VersionDetailPanel : UserControl
                 _profile.DisplayName ?? _versionId);
             InstanceBackup.Restore(info.Path, InstDir());
             WidgetWindow.Boot("[backup] restored " + info.Path + " (safety " + safety + ")");
-            Toast("已还原;恢复前状态已另存为 " + Path.GetFileName(safety));
+            Toast("已还原;恢复前状态已另存为 " + Path.GetFileName(safety), _backupCard);
         }
         catch (Exception ex)
         {
-            Toast("还原失败:" + ex.Message);
+            Toast("还原失败:" + ex.Message, _backupCard);
         }
         RenderTab();
     }
@@ -1506,11 +2910,11 @@ public class VersionDetailPanel : UserControl
         try
         {
             File.Delete(info.Path);
-            Toast("备份已删除");
+            Toast("备份已删除", _backupCard);
         }
         catch (Exception ex)
         {
-            Toast("删除失败:" + ex.Message);
+            Toast("删除失败:" + ex.Message, _backupCard);
         }
         RenderTab();
     }
@@ -1526,7 +2930,7 @@ public class VersionDetailPanel : UserControl
             profile.DisplayName = (_profile.DisplayName ?? _versionId) + " 副本";
             AppServices.VersionProfiles.Set(newId, profile);
             WidgetWindow.Boot("[backup] cloned " + _versionId + " -> " + newId);
-            Toast("已复制为 " + profile.DisplayName);
+            Toast("已复制为 " + profile.DisplayName, _backupCard);
             // 版本列表在后面,顺手刷新一下
             if (PanelWindow.OpenPanels.TryGetValue("versions", out var versionsPanel) &&
                 versionsPanel.PanelContent is VersionsPanel list)
@@ -1534,7 +2938,7 @@ public class VersionDetailPanel : UserControl
         }
         catch (Exception ex)
         {
-            Toast("复制失败:" + ex.Message);
+            Toast("复制失败:" + ex.Message, _backupCard);
         }
         RenderTab();
     }
@@ -1754,12 +3158,6 @@ public class VersionDetailPanel : UserControl
 
     private void BuildModsTab()
     {
-        // 整合包实例:先提醒一次,用户点"我就要装"才显示模组下载列表
-        if (IsModpackVersion() && !_modpackWarningDismissed)
-        {
-            BuildModpackModWarning();
-            return;
-        }
         if (_loader == "")
         {
             // 原版实例:提示安装加载器 + 跳转(逻辑同下载面板)
@@ -1901,6 +3299,10 @@ public class VersionDetailPanel : UserControl
         _browseProjectType = "mod";
         _browseDestDir = "";
         BuildBrowseUi(isModsTab: true);
+
+        // 整合包实例:顶栏提醒一句,但列表照常显示(之前整页只剩提醒,用户以为内容看不了)
+        if (IsModpackVersion() && !_modpackWarningDismissed)
+            _content.Children.Insert(0, BuildModpackModWarning());
     }
 
     /// <summary>
@@ -1908,12 +3310,12 @@ public class VersionDetailPanel : UserControl
     /// 光影页先做前置检测,没有 Iris / Oculus / OptiFine 时给"一键安装配套前置"。
     /// </summary>
     /// <summary>整合包实例进模组下载页时的提醒:避免用户随手加模组导致冲突。</summary>
-    private void BuildModpackModWarning()
+    private Border BuildModpackModWarning()
     {
         var card = new Border
         {
             Style = (Style)Application.Current.Resources["OptRow"],
-            Margin = new Thickness(0, 4, 0, 0),
+            Margin = new Thickness(0, 0, 0, 8),
         };
         var host = new StackPanel();
         host.Children.Add(new TextBlock
@@ -1925,7 +3327,7 @@ public class VersionDetailPanel : UserControl
         });
         host.Children.Add(new TextBlock
         {
-            Text = "整合包里的模组是作者搭配好的，自己加或换版本容易冲突、启动失败。\n确实要加的话，建议先在「修改」页备份一次。",
+            Text = "整合包里的模组是作者搭配好的，自己加或换版本容易冲突、启动失败。\n确实要加的话，建议先在「修改」页备份一次。想看已装的模组，去「本地」页。",
             FontSize = 11.5,
             Foreground = T2,
             Opacity = 0.75,
@@ -1934,23 +3336,23 @@ public class VersionDetailPanel : UserControl
         });
         var go = new Button
         {
-            Content = "我就要装！",
+            Content = "知道了",
             Style = (Style)Application.Current.Resources["ChipButton"],
-            Padding = new Thickness(16, 8, 16, 8),
-            Margin = new Thickness(0, 12, 0, 0),
+            Padding = new Thickness(14, 6, 14, 6),
+            Margin = new Thickness(0, 10, 0, 0),
             HorizontalAlignment = HorizontalAlignment.Left,
         };
         if (Application.Current.Resources["AccentChipBrush"] is Brush accent)
             go.Background = accent;
-        System.Windows.Automation.AutomationProperties.SetName(go, "我就要装");
+        System.Windows.Automation.AutomationProperties.SetName(go, "知道了");
         go.Click += (_, _) =>
         {
             _modpackWarningDismissed = true;
-            RenderTab();
+            if (card.Parent is Panel parent) parent.Children.Remove(card);
         };
         host.Children.Add(go);
         card.Child = host;
-        _content.Children.Add(card);
+        return card;
     }
 
     private void BuildBrowseTab(string kind)
@@ -1992,9 +3394,14 @@ public class VersionDetailPanel : UserControl
         {
             _content.Children.Add(BuildAccordion("下载源", _source == "modrinth" ? "Modrinth" : "CurseForge", options =>
             {
-                options.Children.Add(SourceOption("Modrinth", "", "modrinth"));
-                var cf = SourceOption("CurseForge", "", "curseforge");
-                cf.Opacity = 0.45;
+                options.Children.Add(SourceOption("Modrinth", "官方 API", "modrinth"));
+                var cf = SourceOption("CurseForge",
+                    CurseForgeSource.IsConfigured ? "官方 API" : "未配置 API Key", "curseforge");
+                if (!CurseForgeSource.IsConfigured)
+                {
+                    cf.Opacity = 0.45;
+                    cf.IsEnabled = false;
+                }
                 options.Children.Add(cf);
             }));
         }
@@ -2552,7 +3959,8 @@ public class VersionDetailPanel : UserControl
                 if (pinned != null)
                 {
                     // A 明确要求这个配套版本:它不支持当前 MC 就换更老的 A
-                    if (!SupportsGameVersion(pinned, gv)) continue;
+                    if (!await Fuse.Core.Sources.ModrinthSource.IsJarCompatibleWithMcAsync(
+                            AppServices.Http, pinned, gv, CancellationToken.None).ConfigureAwait(false)) continue;
                     return (a, pinned);
                 }
 
@@ -2679,10 +4087,28 @@ public class VersionDetailPanel : UserControl
             {
                 // 中文关键词先查本地对照表映射成英文名,否则 Modrinth 只会返回汉化包/整合包
                 var effectiveQuery = ModLocalization.ToEnglishQuery(query) ?? query;
-                var (hits, total) = await ModrinthSource.SearchAsync(
-                    AppServices.Http, effectiveQuery, _gameVersion,
-                    _browseProjectType == "mod" ? _loader : "", category, offset, 20,
-                    CancellationToken.None, _browseProjectType).ConfigureAwait(false);
+                List<ModrinthHit> hits;
+                int total;
+                if (_source == "curseforge")
+                {
+                    var ldr = _browseProjectType == "mod" ? _loader : "";
+                    var cf = await CurseForgeSource.SearchAsync(
+                        effectiveQuery, _gameVersion, ldr, category, offset, 20,
+                        CancellationToken.None, _browseProjectType).ConfigureAwait(false);
+                    hits = cf.Hits.Select(h => new ModrinthHit(
+                        h.Id.ToString(), h.Slug, h.Name, h.Summary, h.Downloads,
+                        h.ProjectType, h.IconUrl ?? "", "")).ToList();
+                    total = cf.Total;
+                }
+                else
+                {
+                    var r = await ModrinthSource.SearchAsync(
+                        AppServices.Http, effectiveQuery, _gameVersion,
+                        _browseProjectType == "mod" ? _loader : "", category, offset, 20,
+                        CancellationToken.None, _browseProjectType).ConfigureAwait(false);
+                    hits = r.Hits;
+                    total = r.Total;
+                }
                 await Dispatcher.InvokeAsync(new Action(() =>
                 {
                     // token 过期 = 有更新的加载批次接管,这里不能碰任何状态
@@ -2831,15 +4257,48 @@ public class VersionDetailPanel : UserControl
         }
         info.Children.Add(titleRow);
         var date = hit.DateModified.Length >= 10 ? hit.DateModified.Substring(0, 10) : hit.DateModified;
+        var sourceLabel = _source == "curseforge" ? "CurseForge" : "Modrinth";
         info.Children.Add(new TextBlock
         {
-            Text = $"{FormatCount(hit.Downloads)} 下载 · {date} · Modrinth",
+            Text = date.Length > 0
+                ? $"{FormatCount(hit.Downloads)} 下载 · {date} · {sourceLabel}"
+                : $"{FormatCount(hit.Downloads)} 下载 · {sourceLabel}",
             FontSize = 10.5, Foreground = T2, Opacity = 0.66,
         });
         Grid.SetColumn(info, 1);
         grid.Children.Add(info);
 
-        // ⬇ 下载(前置检测一并下载)
+        // 操作区:网页跳转 + 下载/下载中/已安装
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        var web = new Button
+        {
+            Style = (Style)Application.Current.Resources["ChipButton"],
+            Width = 28, Height = 28,
+            Background = new SolidColorBrush(Color.FromArgb(20, 255, 255, 255)),
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = _source == "curseforge" ? "在 CurseForge 打开" : "在 Modrinth 打开",
+            Content = new TextBlock
+            {
+                Text = "",
+                FontFamily = new FontFamily("Segoe MDL2 Assets"),
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            },
+        };
+        System.Windows.Automation.AutomationProperties.SetName(web,
+            (_source == "curseforge" ? "在 CurseForge 打开 " : "在 Modrinth 打开 ") + hit.Title);
+        web.Click += (_, _) => OpenProjectPage(_source, hit.Slug, _browseProjectType);
+        actions.Children.Add(web);
+
         var dl = new Button
         {
             Style = (Style)Application.Current.Resources["ChipButton"],
@@ -2847,119 +4306,349 @@ public class VersionDetailPanel : UserControl
             Background = new SolidColorBrush(Color.FromArgb(26, 255, 255, 255)),
             Padding = new Thickness(0),
             VerticalAlignment = VerticalAlignment.Center,
-            Content = new TextBlock
-            {
-                Text = "⬇", FontSize = 12,
-                Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-            },
         };
-        System.Windows.Automation.AutomationProperties.SetName(dl, "下载 " + hit.Title);
-        dl.Click += (_, _) => DownloadMod(hit, dl);
-        Grid.SetColumn(dl, 2);
-        grid.Children.Add(dl);
+        dl.Click += (_, _) => DownloadItem(hit, dl);
+        actions.Children.Add(dl);
+        Grid.SetColumn(actions, 2);
+        grid.Children.Add(actions);
+        ApplyDownloadButton(dl, hit.ProjectId, hit.Title, BrowseKind(), DestDirForKind(BrowseKind()));
 
         row.Child = grid;
         return row;
     }
 
-    private void DownloadMod(ModrinthHit hit, Button marker)
+    private string BrowseKind() => _browseProjectType switch
     {
-        if (marker.Tag is "busy") return;
-        marker.Tag = "busy";
-        var projectId = hit.ProjectId;
-        if (_browseProjectType != "mod")
+        "shader" => "shader",
+        "resourcepack" => "resourcepack",
+        _ => "mod",
+    };
+
+    private string DestDirForKind(string kind) => kind switch
+    {
+        "shader" => System.IO.Path.Combine(InstDir(), "shaderpacks"),
+        "resourcepack" => System.IO.Path.Combine(InstDir(), "resourcepacks"),
+        _ => ModsDir(),
+    };
+
+    /// <summary>网页跳转:按来源拼地址(CurseForge 条目接入后传 "curseforge")。</summary>
+    private void OpenProjectPage(string source, string slug, string projectType)
+    {
+        try
         {
-            // 光影 / 材质:单文件直落 shaderpacks / resourcepacks,没有前置依赖规划
-            var destDir = _browseDestDir;
-            _ = Task.Run(async () =>
+            var url = source == "curseforge"
+                ? Fuse.Core.Sources.CurseForgeSource.ProjectPageUrl(slug, projectType)
+                : Fuse.Core.Sources.ModrinthSource.ProjectPageUrl(slug, projectType);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)
             {
-                try
-                {
-                    var file = await Fuse.Core.Sources.ModrinthSource.GetLatestVersionFileAsync(
-                        AppServices.Http, projectId, _gameVersion, "", CancellationToken.None)
-                        .ConfigureAwait(false);
-                    var packTask = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
-                    {
-                        Name = file.FileName,
-                        Kind = "file",
-                        SourceUrl = file.Url,
-                        DestPath = Path.Combine(destDir, file.FileName),
-                        ExpectedHash = string.IsNullOrEmpty(file.Sha1) ? null : file.Sha1,
-                    });
-                    DownloadFocus.Register(packTask.TaskId, "version-detail");
-                    await Dispatcher.InvokeAsync(new Action(() =>
-                    {
-                        marker.Tag = null;
-                        if (marker.Content is TextBlock t2)
-                        {
-                            t2.Text = "✓";
-                            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-                            timer.Tick += (_, _) => { t2.Text = "⬇"; timer.Stop(); };
-                            timer.Start();
-                        }
-                        Toast("已加入下载队列:" + file.FileName);
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    await Dispatcher.InvokeAsync(new Action(() =>
-                    {
-                        marker.Tag = null;
-                        Toast("下载失败:" + ex.Message);
-                    }));
-                }
+                UseShellExecute = true,
             });
+        }
+        catch (Exception ex)
+        {
+            Toast("打开网页失败:" + ex.Message);
+        }
+    }
+
+    /// <summary>按钮视觉:下载中=旋转 / 已安装=打勾 / 失败=红色感叹号 / 其余=下载。</summary>
+    private void ApplyDownloadButton(Button button, string projectId, string title,
+        string kind, string destDir)
+    {
+        if (button.Content is Fuse.App.Controls.Spinner oldSpinner) oldSpinner.Stop();
+
+        if (_itemDownloads.TryGetValue(projectId, out var state) && !state.Failed)
+        {
+            var spinnerBrush = (Brush)Application.Current.Resources["GreenBrush"];
+            var spinner = new Fuse.App.Controls.Spinner(spinnerBrush);
+            spinner.Start();
+            button.Content = spinner;
+            button.IsEnabled = false;
+            System.Windows.Automation.AutomationProperties.SetName(button, "正在下载 " + title);
             return;
         }
-        var modsDir = ModsDir();
-        var instanceDir = InstDir();
+        if (state != null && state.Failed)
+        {
+            button.Content = Glyph("!", (Brush)Application.Current.Resources["DangerBrush"]);
+            button.IsEnabled = false;
+            System.Windows.Automation.AutomationProperties.SetName(button, "下载失败 " + title);
+            return;
+        }
+        if (Fuse.Core.Sources.ContentRecordStore.IsInstalled(InstDir(), kind, projectId, destDir))
+        {
+            button.Content = Glyph("✓", (Brush)Application.Current.Resources["GreenBrush"]);
+            button.IsEnabled = false;
+            button.ToolTip = "已安装";
+            System.Windows.Automation.AutomationProperties.SetName(button, "已安装 " + title);
+            return;
+        }
+        button.Content = Glyph("⬇", (Brush)Application.Current.Resources["TextPrimaryBrush"]);
+        button.IsEnabled = true;
+        button.ToolTip = null;
+        System.Windows.Automation.AutomationProperties.SetName(button, "下载 " + title);
+    }
+
+    private static TextBlock Glyph(string text, Brush brush) => new()
+    {
+        Text = text,
+        FontSize = 12,
+        Foreground = brush,
+        HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center,
+    };
+
+    private void DownloadItem(ModrinthHit hit, Button button)
+    {
+        var kind = BrowseKind();
+        var destDir = DestDirForKind(kind);
+        if (_itemDownloads.ContainsKey(hit.ProjectId)) return;
+        if (Fuse.Core.Sources.ContentRecordStore.IsInstalled(InstDir(), kind, hit.ProjectId, destDir))
+            return;
+
+        var state = new ItemDownloadState
+        {
+            ProjectId = hit.ProjectId,
+            Kind = kind,
+            Source = _source,
+            DestDir = destDir,
+            Title = hit.Title,
+            Button = button,
+        };
+        _itemDownloads[hit.ProjectId] = state;
+        ApplyDownloadButton(button, hit.ProjectId, hit.Title, kind, destDir);
+
         _ = Task.Run(async () =>
         {
             try
             {
-                var plan = await ModInstaller.PlanAsync(
-                    AppServices.Http, projectId, _gameVersion, _loader, modsDir,
-                    CancellationToken.None).ConfigureAwait(false);
-                foreach (var item in plan.Items)
+                if (_source == "curseforge")
                 {
-                    var modTask = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
-                    {
-                        Name = Path.GetFileName(item.DestPath),
-                        Kind = "file",
-                        SourceUrl = item.Url,
-                        DestPath = item.DestPath,
-                        ExpectedHash = item.ExpectedHash,
-                    });
-                    DownloadFocus.Register(modTask.TaskId, "version-detail");
-                    AppServices.RecordModInstall(instanceDir, item.Url, Path.GetFileName(item.DestPath), item.ExpectedHash);
+                    await DownloadCurseForgeAsync(hit, state).ConfigureAwait(false);
+                    await Dispatcher.InvokeAsync(new Action(() => ReconcileDownload(state)));
+                    return;
                 }
-                await Dispatcher.InvokeAsync(new Action(() =>
+                if (kind == "mod")
                 {
-                    marker.Tag = null;
-                    var summary = plan.Items.Count == 0
-                        ? "已安装过,跳过 ✓"
-                        : $"已加入队列:本体 + {plan.Items.Count - 1} 个前置(已有 {plan.AlreadyPresent.Count} 个)";
-                    if (marker.Content is TextBlock t)
+                    var plan = await Fuse.Core.Installer.ModInstaller.PlanAsync(
+                        AppServices.Http, hit.ProjectId, _gameVersion, _loader, destDir,
+                        CancellationToken.None).ConfigureAwait(false);
+                    state.MainFileName = plan.MainFileName;
+                    foreach (var item in plan.Items)
                     {
-                        t.Text = "✓";
-                        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-                        timer.Tick += (_, _) => { t.Text = "⬇"; timer.Stop(); };
-                        timer.Start();
+                        var task = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+                        {
+                            Name = System.IO.Path.GetFileName(item.DestPath),
+                            Kind = "file",
+                            SourceUrl = item.Url,
+                            DestPath = item.DestPath,
+                            ExpectedHash = item.ExpectedHash,
+                        });
+                        DownloadFocus.Register(task.TaskId, "version-detail");
+                        state.TaskIds.Add(task.TaskId);
                     }
-                    Toast(summary);
-                }));
+                }
+                else
+                {
+                    var file = await Fuse.Core.Sources.ModrinthSource.GetLatestVersionFileAsync(
+                        AppServices.Http, hit.ProjectId, _gameVersion, "", CancellationToken.None)
+                        .ConfigureAwait(false);
+                    state.MainFileName = file.FileName;
+                    var task = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+                    {
+                        Name = file.FileName,
+                        Kind = "file",
+                        SourceUrl = file.Url,
+                        DestPath = System.IO.Path.Combine(destDir, file.FileName),
+                        ExpectedHash = string.IsNullOrEmpty(file.Sha1) ? null : file.Sha1,
+                    });
+                    DownloadFocus.Register(task.TaskId, "version-detail");
+                    state.TaskIds.Add(task.TaskId);
+                }
+
+                await Dispatcher.InvokeAsync(new Action(() => ReconcileDownload(state)));
             }
             catch (Exception ex)
             {
+                WidgetWindow.Boot("[content] download failed: " + hit.Title + " · " + ex.Message);
                 await Dispatcher.InvokeAsync(new Action(() =>
                 {
-                    marker.Tag = null;
+                    _itemDownloads.Remove(hit.ProjectId);
+                    if (state.Button != null)
+                    {
+                        ApplyDownloadButton(state.Button, hit.ProjectId, hit.Title, kind, destDir);
+                        FlashFailure(state.Button, hit.ProjectId, hit.Title, kind, destDir);
+                    }
                     Toast("下载失败:" + ex.Message);
                 }));
             }
         });
+    }
+
+    /// <summary>CurseForge 下载:只使用 API 返回的 downloadUrl,并带上一级 required 依赖。</summary>
+    private async Task DownloadCurseForgeAsync(ModrinthHit hit, ItemDownloadState state)
+    {
+        if (!CurseForgeSource.IsConfigured)
+            throw new InvalidOperationException("CurseForge 未启用（构建时未注入 API Key）");
+        if (!int.TryParse(hit.ProjectId, out var projectId))
+            throw new InvalidOperationException("CurseForge 项目 id 无效");
+
+        var loader = state.Kind == "mod" ? _loader : "";
+        var files = await CurseForgeSource.GetFilesAsync(projectId, _gameVersion, loader, CancellationToken.None)
+            .ConfigureAwait(false);
+        var main = files.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f.DownloadUrl));
+        if (main == null)
+            throw new InvalidOperationException("作者未授权第三方下载，请点网页按钮到 CurseForge 下载");
+
+        state.MainFileName = main.FileName;
+        Fuse.Core.Sources.ContentRecordStore.Record(
+            InstDir(), "curseforge", state.ProjectId, main.FileName, state.Kind, main.Sha1);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        EnqueueCfFile(state, main, names, isMain: true);
+
+        if (state.Kind == "mod")
+        {
+            var deps = await CurseForgeSource.GetDependenciesAsync(projectId, main.Id, CancellationToken.None)
+                .ConfigureAwait(false);
+            foreach (var dep in deps.Where(d => d.RelationType == 3))
+            {
+                try
+                {
+                    var depFiles = await CurseForgeSource.GetFilesAsync(
+                        dep.ModId, _gameVersion, loader, CancellationToken.None).ConfigureAwait(false);
+                    var depFile = depFiles.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f.DownloadUrl));
+                    if (depFile != null) EnqueueCfFile(state, depFile, names, isMain: false);
+                }
+                catch (Exception)
+                {
+                    // 单个前置失败不阻塞本体;缺少前置由游戏启动时的模组加载器报出来
+                }
+            }
+        }
+    }
+
+    private void EnqueueCfFile(ItemDownloadState state, CfFile file, HashSet<string> names, bool isMain)
+    {
+        if (!names.Add(file.FileName)) return;
+        var task = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+        {
+            Name = file.FileName,
+            Kind = "file",
+            SourceUrl = file.DownloadUrl!,
+            DestPath = System.IO.Path.Combine(state.DestDir, file.FileName),
+            ExpectedHash = string.IsNullOrWhiteSpace(file.Sha1) ? null : file.Sha1,
+        });
+        DownloadFocus.Register(task.TaskId, "version-detail");
+        state.TaskIds.Add(task.TaskId);
+        if (isMain) state.MainTaskIds.Add(task.TaskId);
+    }
+
+    /// <summary>把队列里这些任务的终态收敛成"已安装 / 失败"。</summary>
+    private void ReconcileDownload(ItemDownloadState state)
+    {
+        if (!_itemDownloads.ContainsKey(state.ProjectId)) return;
+        var tasks = AppServices.Queue?.GetTasks();
+        if (tasks != null)
+        {
+            foreach (var id in state.TaskIds.ToList())
+            {
+                var task = tasks.FirstOrDefault(t => t.TaskId == id);
+                if (task == null) continue;
+                if (task.Status == Fuse.Core.Download.DownloadTaskStatus.Completed)
+                    state.TaskIds.Remove(id);
+                else if (task.Status is Fuse.Core.Download.DownloadTaskStatus.Failed
+                         or Fuse.Core.Download.DownloadTaskStatus.Removed)
+                {
+                    if (state.MainTaskIds.Contains(id))
+                    {
+                        MarkDownloadFailed(state);
+                        return;
+                    }
+                    // 前置失败:移除该任务继续等本体,避免本体已装好却显示红叹号
+                    state.TaskIds.Remove(id);
+                    WidgetWindow.Boot("[content] dependency failed: " + task.Name);
+                }
+            }
+        }
+        if (state.TaskIds.Count == 0) CompleteDownload(state);
+    }
+
+    private void CompleteDownload(ItemDownloadState state)
+    {
+        if (!string.IsNullOrEmpty(state.MainFileName))
+        {
+            Fuse.Core.Sources.ContentRecordStore.Record(
+                InstDir(), state.Source, state.ProjectId, state.MainFileName, state.Kind, null);
+        }
+        _itemDownloads.Remove(state.ProjectId);
+        if (state.Button != null)
+            ApplyDownloadButton(state.Button, state.ProjectId, state.Title, state.Kind, state.DestDir);
+    }
+
+    private void MarkDownloadFailed(ItemDownloadState state)
+    {
+        state.Failed = true;
+        if (state.Button != null)
+        {
+            ApplyDownloadButton(state.Button, state.ProjectId, state.Title, state.Kind, state.DestDir);
+            state.Button.IsEnabled = false;
+        }
+        var projectId = state.ProjectId;
+        var button = state.Button;
+        var title = state.Title;
+        var kind = state.Kind;
+        var dest = state.DestDir;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _itemDownloads.Remove(projectId);
+            if (button != null) ApplyDownloadButton(button, projectId, title, kind, dest);
+        };
+        timer.Start();
+        Toast("下载失败,请重试");
+    }
+
+    private void FlashFailure(Button button, string projectId, string title, string kind, string destDir)
+    {
+        // 入队/解析阶段就失败:没有任务可跟踪,短暂红叹号后回到下载
+        button.Content = Glyph("!", (Brush)Application.Current.Resources["DangerBrush"]);
+        button.IsEnabled = false;
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            ApplyDownloadButton(button, projectId, title, kind, destDir);
+        };
+        timer.Start();
+    }
+
+    private void OnDownloadTaskChanged(Fuse.Core.Download.DownloadTaskRecord record)
+    {
+        if (record.Status is not (Fuse.Core.Download.DownloadTaskStatus.Completed
+            or Fuse.Core.Download.DownloadTaskStatus.Failed
+            or Fuse.Core.Download.DownloadTaskStatus.Removed))
+            return;
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            foreach (var state in _itemDownloads.Values.ToList())
+            {
+                if (!state.TaskIds.Contains(record.TaskId)) continue;
+                if (record.Status == Fuse.Core.Download.DownloadTaskStatus.Completed)
+                {
+                    state.TaskIds.Remove(record.TaskId);
+                    if (state.TaskIds.Count == 0) CompleteDownload(state);
+                }
+                else if (state.MainTaskIds.Contains(record.TaskId))
+                {
+                    MarkDownloadFailed(state);
+                }
+                else
+                {
+                    state.TaskIds.Remove(record.TaskId);
+                    if (state.TaskIds.Count == 0) CompleteDownload(state);
+                }
+                break;
+            }
+        }));
     }
 
     internal async void LoadIcon(Border host, string url, string title)
@@ -3508,7 +5197,7 @@ public class VersionDetailPanel : UserControl
                 }
                 catch (Exception ex)
                 {
-                    Toast("删除失败:" + ex.Message);
+                    Toast("删除失败:" + ex.Message, _backupCard);
                 }
                 RenderTab();
             };
@@ -3635,7 +5324,7 @@ public class VersionDetailPanel : UserControl
         }
         catch (Exception ex)
         {
-            Toast("备份失败:" + ex.Message);
+            Toast("备份失败:" + ex.Message, _backupCard);
         }
     }
 
@@ -3658,7 +5347,7 @@ public class VersionDetailPanel : UserControl
         }
         catch (Exception ex)
         {
-            Toast("还原失败:" + ex.Message);
+            Toast("还原失败:" + ex.Message, _backupCard);
         }
         RenderTab();
     }
@@ -3670,11 +5359,11 @@ public class VersionDetailPanel : UserControl
         try
         {
             File.Delete(info.Path);
-            Toast("备份已删除");
+            Toast("备份已删除", _backupCard);
         }
         catch (Exception ex)
         {
-            Toast("删除失败:" + ex.Message);
+            Toast("删除失败:" + ex.Message, _backupCard);
         }
         RenderTab();
     }
@@ -3735,7 +5424,7 @@ public class VersionDetailPanel : UserControl
             open.Click += (_, _) =>
             {
                 try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(captured.FullName) { UseShellExecute = true }); }
-                catch (Exception ex) { Toast("打开失败:" + ex.Message); }
+                catch (Exception ex) { Toast("打开失败:" + ex.Message, _crashCard); }
             };
             Grid.SetColumn(open, 1);
             grid.Children.Add(open);
@@ -3760,7 +5449,7 @@ public class VersionDetailPanel : UserControl
             del.Click += (_, _) =>
             {
                 try { File.Delete(captured.FullName); Toast("截图已删除"); }
-                catch (Exception ex) { Toast("删除失败:" + ex.Message); }
+                catch (Exception ex) { Toast("删除失败:" + ex.Message, _backupCard); }
                 RenderTab();
             };
             Grid.SetColumn(del, 2);
@@ -4012,7 +5701,7 @@ public class VersionDetailPanel : UserControl
             }
             catch (Exception ex)
             {
-                Toast("打开失败:" + ex.Message);
+                Toast("打开失败:" + ex.Message, _crashCard);
             }
         };
         _content.Children.Add(open);
@@ -4153,18 +5842,44 @@ public class VersionDetailPanel : UserControl
 
     // ---------- 公共小件 ----------
 
-    private void Toast(string message)
+    private string LoaderLabel() => _loader switch
     {
-        // 行内提示:短暂叠在内容顶部,2.5s 后消失(任意页签可用)
+        "fabric" => "Fabric",
+        "forge" => "Forge",
+        "neoforge" => "NeoForge",
+        "quilt" => "Quilt",
+        _ => "原版",
+    };
+
+    private void Toast(string message, FrameworkElement? anchor = null)
+    {
+        // 行内提示:短暂出现,2.5s 后消失。
+        // anchor 非空时插到该卡片正上方(占布局位置,不会和别的卡片重叠);
+        // 为空时保持旧行为(内容区顶部),用于全局消息。
         var banner = new TextBlock
         {
             Text = message, FontSize = 11.5,
             Margin = new Thickness(2, 0, 2, 6), TextWrapping = TextWrapping.Wrap,
         };
         banner.SetResourceReference(TextBlock.ForegroundProperty, "AccentTextBrush");
-        _content.Children.Insert(0, banner);
+
+        Panel? host = anchor?.Parent as Panel;
+        if (host != null && anchor != null)
+        {
+            var index = host.Children.IndexOf(anchor);
+            host.Children.Insert(index < 0 ? host.Children.Count : index, banner);
+        }
+        else
+        {
+            _content.Children.Insert(0, banner);
+        }
+
         var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
-        timer.Tick += (_, _) => { _content.Children.Remove(banner); timer.Stop(); };
+        timer.Tick += (_, _) =>
+        {
+            (host as Panel ?? _content).Children.Remove(banner);
+            timer.Stop();
+        };
         timer.Start();
     }
 

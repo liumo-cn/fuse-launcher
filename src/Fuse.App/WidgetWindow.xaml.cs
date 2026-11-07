@@ -77,6 +77,30 @@ public partial class WidgetWindow : Window
         Icon = AppIcon.Image;
         ApplySavedPosition();
         RefreshOrbGlyph();
+
+        // LittleSkin 仪表盘的「外置登录」卡片可直接拖进来:识别 URL → 打开登录页预填
+        AllowDrop = true;
+        PreviewDragOver += (_, e) =>
+        {
+            if (!AuthServerDrop.TryGetUrl(e.Data))
+            {
+                e.Effects = DragDropEffects.None;
+                DropHint.Visibility = Visibility.Collapsed;
+                e.Handled = true;
+                return;
+            }
+            e.Effects = DragDropEffects.Copy;
+            DropHint.Visibility = Visibility.Visible;
+            e.Handled = true;
+        };
+        PreviewDragLeave += (_, _) => DropHint.Visibility = Visibility.Collapsed;
+        Drop += async (_, e) =>
+        {
+            DropHint.Visibility = Visibility.Collapsed;
+            if (!AuthServerDrop.TryGetUrl(e.Data, out var url)) return;
+            e.Handled = true;
+            await AuthServerDrop.AddAsync(url, this);
+        };
         // 花瓣初始隐藏（逐实例变换,便于动画）
         for (var i = 0; i < Petals().Length; i++)
         {

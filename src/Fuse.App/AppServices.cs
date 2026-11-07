@@ -830,17 +830,37 @@ public static class AppServices
     {
         if (Accounts.Data.ActiveType != "external") return null;
         var apiRoot = Accounts.Data.ExtApiRoot;
-        var password = Accounts.GetExternalPassword();
-        var userName = Accounts.Data.ExtUserName ?? Accounts.Data.ExtPlayerName;
-        if (string.IsNullOrEmpty(apiRoot) || string.IsNullOrEmpty(password) || string.IsNullOrEmpty(userName))
-            throw new InvalidOperationException("外置账号缺少站点或密码,请重新登录");
+        if (string.IsNullOrEmpty(apiRoot))
+            throw new InvalidOperationException("外置账号缺少站点，请重新登录");
 
-        var clientToken = Accounts.Data.ExtClientToken;
-        if (string.IsNullOrEmpty(clientToken)) clientToken = Guid.NewGuid().ToString("N");
-        var session = await Core.Accounts.ExternalAuth.AuthenticateAsync(
-            Http, apiRoot!, userName!, password!, clientToken!, System.Threading.CancellationToken.None)
-            .ConfigureAwait(false);
-        Accounts.UpdateExternalSession(session);
+        var oauthRefresh = Accounts.GetExternalOAuthRefresh();
+        if (!string.IsNullOrEmpty(oauthRefresh))
+        {
+            // LittleSkin OAuth:刷新令牌 → 重新换取 Minecraft 令牌,不需要密码
+            var token = await Core.Accounts.LittleSkinOAuth.RefreshAsync(
+                Http, oauthRefresh!, System.Threading.CancellationToken.None).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(token.RefreshToken)) Accounts.UpdateExternalOAuth(token.RefreshToken);
+            var uuid = Accounts.Data.ExtUuid;
+            if (string.IsNullOrEmpty(uuid))
+                throw new InvalidOperationException("LittleSkin 账号缺少角色信息，请重新授权登录");
+            var oauthSession = await Core.Accounts.LittleSkinOAuth.CreateMinecraftTokenAsync(
+                Http, token.AccessToken, uuid!, System.Threading.CancellationToken.None).ConfigureAwait(false);
+            Accounts.UpdateExternalSession(oauthSession);
+        }
+        else
+        {
+            var password = Accounts.GetExternalPassword();
+            var userName = Accounts.Data.ExtUserName ?? Accounts.Data.ExtPlayerName;
+            if (string.IsNullOrEmpty(password) || string.IsNullOrEmpty(userName))
+                throw new InvalidOperationException("外置账号缺少站点或密码,请重新登录");
+
+            var clientToken = Accounts.Data.ExtClientToken;
+            if (string.IsNullOrEmpty(clientToken)) clientToken = Guid.NewGuid().ToString("N");
+            var session = await Core.Accounts.ExternalAuth.AuthenticateAsync(
+                Http, apiRoot!, userName!, password!, clientToken!, System.Threading.CancellationToken.None)
+                .ConfigureAwait(false);
+            Accounts.UpdateExternalSession(session);
+        }
 
         var jar = await Core.Accounts.AuthlibInjector.EnsureAsync(
             Http, System.IO.Path.Combine(InstallDirectory, "injector"), System.Threading.CancellationToken.None)
@@ -886,9 +906,10 @@ public static class AppServices
 
         // 点击通明色:未单独设置时跟随组件高亮色,保证默认观感不变
         var hover = ParseHex(Config.HoverColorHex, accent);
-        res["HoverBrush"] = new SolidColorBrush(Color.FromArgb(0x4D, hover.R, hover.G, hover.B));
+        // 悬停不透明度 95%(用户两轮上调:30%→80%→95%,要求悬停色贴近色板原色);按下 97%
+        res["HoverBrush"] = new SolidColorBrush(Color.FromArgb(0xF2, hover.R, hover.G, hover.B));
         res["HoverSoftBrush"] = new SolidColorBrush(Color.FromArgb(0x1A, hover.R, hover.G, hover.B));
-        res["HoverPressedBrush"] = new SolidColorBrush(Color.FromArgb(0x66, hover.R, hover.G, hover.B));
+        res["HoverPressedBrush"] = new SolidColorBrush(Color.FromArgb(0xF7, hover.R, hover.G, hover.B));
         res["HoverSolidBrush"] = new SolidColorBrush(Scale(hover, 0.72));
         res["HoverPetalBrush"] = new SolidColorBrush(Color.FromArgb(0x61, hover.R, hover.G, hover.B));
         // 花瓣悬浮态:同一套径向渐变、只提亮,不加任何描边

@@ -5,6 +5,8 @@
              ShutdownMode="OnExplicitShutdown">
   <Application.Resources>
 
+      <!-- ===== 旧玻璃风令牌与样式(现有面板仍引用) ===== -->
+
     <!-- ============ 玻璃风设计令牌(设计稿 v1.0) ============ -->
     <Color x:Key="GreenColor">#A416E5</Color>
     <SolidColorBrush x:Key="GreenBrush" Color="#A416E5"/>

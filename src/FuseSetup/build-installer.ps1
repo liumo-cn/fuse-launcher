@@ -20,6 +20,17 @@ Write-Host ('publish exit=' + $LASTEXITCODE)
 $out | Select-Object -Last 6 | ForEach-Object { Write-Host ("| " + $_) }
 if ($LASTEXITCODE -ne 0) { throw 'publish failed' }
 
+# 1.2) PresentMon 兜底组件(可选 FPS):有本地文件就随包分发,没有则运行时自动下载
+$pmSource = Join-Path $root 'tools\PresentMon-2.6.0-x64.exe'
+if (Test-Path $pmSource) {
+    $pmDir = Join-Path $root 'dist\app\tools'
+    New-Item -ItemType Directory -Path $pmDir -Force | Out-Null
+    Copy-Item $pmSource (Join-Path $pmDir 'PresentMon-x64.exe') -Force
+    Write-Host 'PresentMon: bundled from tools\PresentMon-2.6.0-x64.exe'
+} else {
+    Write-Host 'PresentMon: skipped (will be downloaded at runtime)'
+}
+
 # 1.5) 卸载助手(独立小程序,和安装器外观/体积都不同;放进 payload 一起分发)
 $out = & dotnet build (Join-Path $root 'src\FuseUninstaller\FuseUninstaller.csproj') -c Release 2>&1
 Write-Host ('uninstaller exit=' + $LASTEXITCODE)
@@ -31,7 +42,8 @@ if (-not (Test-Path $uninstallerExe)) { throw 'uninstaller exe missing' }
 # 2) 打包 payload(剔除 pdb:里面含源码路径,不随安装包分发)
 $stage = Join-Path $env:TEMP ('fuse-payload-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage | Out-Null
-Copy-Item (Join-Path $root 'dist\app\*') $stage -Exclude *.pdb
+Copy-Item (Join-Path $root 'dist\app\*') $stage -Recurse -Force
+Get-ChildItem $stage -Recurse -Filter *.pdb | Remove-Item -Force
 Copy-Item $uninstallerExe (Join-Path $stage 'Uninstall Fuse Launcher.exe')
 $payloadZip = Join-Path $root 'src\FuseSetup\payload.zip'
 if (Test-Path $payloadZip) { Remove-Item $payloadZip }

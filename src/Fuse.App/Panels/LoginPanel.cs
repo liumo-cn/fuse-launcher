@@ -118,6 +118,28 @@ public class LoginPanel : UserControl
         _extForm.Children.Add(FieldLabel("站点地址(留空用 LittleSkin)"));
         _addressBox = new TextBox { Text = "littleskin.cn" };
         _extForm.Children.Add(InputShell(_addressBox));
+        _extSiteNote = new TextBlock
+        {
+            FontSize = 10.5,
+            Margin = new Thickness(2, 2, 2, 4),
+            TextWrapping = TextWrapping.Wrap,
+            Visibility = Visibility.Collapsed,
+        };
+        _extSiteNote.SetResourceReference(TextBlock.ForegroundProperty, "AccentTextBrush");
+        _extForm.Children.Add(_extSiteNote);
+        if (ElevationStatus.IsAdministrator)
+        {
+            var adminHint = new TextBlock
+            {
+                Text = "管理员模式下浏览器拖拽不可用：复制 LittleSkin 卡片地址后点「从剪贴板识别」。",
+                FontSize = 10.5,
+                Opacity = 0.66,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(2, 0, 2, 4),
+            };
+            adminHint.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            _extForm.Children.Add(adminHint);
+        }
         _extForm.Children.Add(FieldLabel("用户邮箱"));
         _userBox = new TextBox();
         _extForm.Children.Add(InputShell(_userBox));
@@ -135,11 +157,44 @@ public class LoginPanel : UserControl
         {
             Style = (Style)Application.Current.Resources["ChipButton"],
             Content = "登录皮肤站",
-            Margin = new Thickness(0, 8, 0, 0),
-            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0),
+            Height = 30,
+            Padding = new Thickness(14, 0, 14, 0),
+            VerticalAlignment = VerticalAlignment.Center,
         };
         extGo.Click += async (_, _) => await AcceptExternalAsync();
-        _extForm.Children.Add(extGo);
+
+        var clip = new Button
+        {
+            Style = (Style)Application.Current.Resources["ChipButton"],
+            Content = "从剪贴板识别",
+            Margin = new Thickness(0, 0, 8, 0),
+            Height = 30,
+            Padding = new Thickness(14, 0, 14, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(clip, "从剪贴板识别认证服务器");
+        clip.Click += async (_, _) =>
+        {
+            var text = Clipboard.ContainsText() ? Clipboard.GetText() : "";
+            if (!AuthServerDrop.TryExtractUrl(text, out var url))
+            {
+                _extStatus!.Text = "剪贴板里没有可识别的 https 地址";
+                _extStatus.Visibility = Visibility.Visible;
+                return;
+            }
+            await AuthServerDrop.AddAsync(url, Window.GetWindow(this), fromClipboard: true);
+        };
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        buttons.Children.Add(clip);
+        buttons.Children.Add(extGo);
+        _extForm.Children.Add(buttons);
         stack.Children.Add(_extForm);
         _extButton.Click += (_, _) => OpenSection("external");
 
@@ -158,6 +213,7 @@ public class LoginPanel : UserControl
     private Button? _extButton;
     private StackPanel? _extForm;
     private TextBlock? _extStatus;
+    private TextBlock? _extSiteNote;
     private TextBox? _addressBox;
     private TextBox? _userBox;
     private PasswordBox? _passwordBox;
@@ -191,6 +247,26 @@ public class LoginPanel : UserControl
     }
 
     /// <summary>三个登录入口互斥展开:打开一个时把其它人的表单收回去。</summary>
+    /// <summary>从拖拽/剪贴板识别到认证服务器后预填表单(站点只读)。</summary>
+    public void PrefillAuthServer(string apiRoot, string serverName)
+    {
+        // 直接展开,不能走 OpenSection:它会把"已经展开的 external"当成再次点击而收起
+        _offlineInput.Visibility = Visibility.Collapsed;
+        if (_extForm != null) _extForm.Visibility = Visibility.Visible;
+        _openSection = "external";
+        if (_addressBox != null)
+        {
+            _addressBox.Text = apiRoot;
+            _addressBox.IsReadOnly = true;
+        }
+        if (_extSiteNote != null)
+        {
+            _extSiteNote.Text = "已识别认证服务器：" + serverName;
+            _extSiteNote.Visibility = Visibility.Visible;
+        }
+        _userBox?.Focus();
+    }
+
     private void OpenSection(string key)
     {
         // 只允许一个下拉表单在场:先无条件全部收起,再只展开最后点击的那个

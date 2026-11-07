@@ -41,3 +41,16 @@ tools/*.exe
 src/Fuse.App/Assets/creeper.png
 
 docs/curseforge-application.md
+
+# 构建期注入的密钥(仅存在于构建机)
+src/Fuse.App/Generated/
+
+docs/curseforge-key-protection.md
+
+# 本地测试残留(在仓库根运行游戏/联机脚本时产生,不属于源码)
+/config/
+/p2p_flow2.ps1
+
+# 内部交接/审计文档(含本机路径,不随公开仓库分发)
+docs/HANDOVER.md
+docs/audit-2026-11-07-oss-1.2.0.md

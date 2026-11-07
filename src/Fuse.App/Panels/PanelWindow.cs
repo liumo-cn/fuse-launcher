@@ -113,11 +113,32 @@ public class PanelWindow : Window
         };
         var chrome = BuildChrome(kind, title, content, out var titleBar, out var closeButton);
         window.Content = chrome;
+
+        // 网页里把 authlib-injector 地址拖到任意浮窗:交给登录页预填(1.2.0 原有能力)。
+        // 只拦认证地址;文件拖拽留给子控件(FolderListPanel 的 .mrpack/.zip/.mcdl.json 导入)。
+        window.AllowDrop = true;
+        window.PreviewDragOver += (_, e) =>
+        {
+            if (!AuthServerDrop.TryGetUrl(e.Data)) return;
+            e.Effects = DragDropEffects.Copy;
+            e.Handled = true;
+        };
+        window.Drop += async (_, e) =>
+        {
+            if (!AuthServerDrop.TryGetUrl(e.Data, out var url)) return;
+            e.Handled = true;
+            await AuthServerDrop.AddAsync(url, window);
+        };
+
         // ✕ 关闭符号:唯一关闭方式(用户要求,不再失焦自动关闭)
         closeButton.Cursor = System.Windows.Input.Cursors.Hand;
-        // Preview 阶段拦截:阻止事件冒泡到标题条触发拖动捕获
-        closeButton.PreviewMouseLeftButtonDown += (_, e) => e.Handled = true;
-        closeButton.MouseLeftButtonUp += (_, _) => window.Close();
+        // Preview 阶段直接关闭:成对的 MouseUp 会被 WPF 标记 handled,挂 MouseUp 永远不触发
+        // (1.2.0 遗留"浮窗 ✕ 点了没反应"的修复);e.Handled 同时阻止冒泡到标题条拖动
+        closeButton.PreviewMouseLeftButtonDown += (_, e) =>
+        {
+            e.Handled = true;
+            window.Close();
+        };
         // 标题栏手动拖拽(捕获鼠标 + 增量移动,比 DragMove 可靠)
         var dragging = false;
         var dragOrigin = new Point();

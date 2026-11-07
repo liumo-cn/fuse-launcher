@@ -70,6 +70,57 @@ public static class AppLauncher
                 return LaunchOutcome.Failed;
             }
 
+            // 启动前模组冲突预检:只拦"能自动修"的问题,纯建议不打扰
+            if (AppServices.Config.CheckModConflictsBeforeLaunch)
+            {
+                try
+                {
+                    var gameVersion = Fuse.Core.Versioning.VersionJsonLoader.ResolveGameVersion(versionsRoot, versionId);
+                    var modsDir = System.IO.Path.Combine(gameDirectory, "mods");
+                    if (System.IO.Directory.Exists(modsDir))
+                    {
+                        var loader = DetectLoader(versionsRoot, versionId);
+                        var report = await Task.Run(() =>
+                            Fuse.Core.ModConflict.ModConflictAnalyzer.Analyze(modsDir, gameVersion, loader));
+                        if (report.Actions.Any(a => a.CanAutoFix))
+                        {
+                            var dialog = new ModConflictWindow(report)
+                            {
+                                Owner = widget,
+                            };
+                            if (dialog.ShowDialog() != true || dialog.Selected.Count == 0)
+                            {
+                                Log("cancelled by conflict dialog: " + versionId);
+                                status("已取消启动：请先修复模组冲突");
+                                LaunchState.Abandon(versionId);
+                                widget?.NotifyLaunchFailed();
+                                return LaunchOutcome.Failed;
+                            }
+
+                            status("正在修复模组冲突…");
+                            var outcome = await Fuse.Core.ModConflict.ModConflictFixer.ApplyAsync(
+                                modsDir, gameVersion, "", dialog.Selected, AppServices.Http,
+                                new Progress<string>(msg => status(msg)), System.Threading.CancellationToken.None);
+                            if (outcome.Failed.Count > 0)
+                            {
+                                new InfoWindow("模组冲突修复",
+                                    "以下项目没有修好：" + Environment.NewLine + "· " +
+                                    string.Join(Environment.NewLine + "· ", outcome.Failed)) { Owner = widget }.ShowDialog();
+                                LaunchState.Abandon(versionId);
+                                widget?.NotifyLaunchFailed();
+                                return LaunchOutcome.Failed;
+                            }
+                            Log("mod conflicts fixed before launch: " + outcome.Applied.Count);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 预检失败不能阻止正常启动
+                    Log("conflict precheck skipped: " + ex.Message);
+                }
+            }
+
             // 外置登录账号:先静默换新 token 并确保 authlib-injector 就位(失败会抛,走下面的 catch + 弹窗)
             var agentArg = await AppServices.PrepareExternalLaunchAsync().ConfigureAwait(false);
 
@@ -189,5 +240,24 @@ public static class AppLauncher
             current.Append(ch);
         }
         if (current.Length > 0) yield return current.ToString();
+    }
+
+    private static string DetectLoader(string versionsRoot, string versionId)
+    {
+        try
+        {
+            var merged = Fuse.Core.Versioning.VersionJsonLoader.Load(versionsRoot, versionId);
+            foreach (var lib in merged.Libraries)
+            {
+                var name = lib.Name;
+                if (name.StartsWith("net.fabricmc:fabric-loader", StringComparison.OrdinalIgnoreCase)) return "fabric";
+                if (name.StartsWith("net.neoforged", StringComparison.OrdinalIgnoreCase)) return "neoforge";
+                if (name.StartsWith("net.minecraftforge:", StringComparison.OrdinalIgnoreCase)) return "forge";
+            }
+        }
+        catch (Exception)
+        {
+        }
+        return "";
     }
 }

@@ -11,6 +11,9 @@ namespace Fuse.Core.Accounts;
 public sealed record ExternalSession(
     string ApiRoot, string AccessToken, string ClientToken, string Uuid, string PlayerName);
 
+/// <summary>探测到的认证服务器(API 根 + 站点显示名)。</summary>
+public sealed record ExternalServer(string ApiRoot, string ServerName);
+
 /// <summary>
 /// 第三方皮肤站登录(Blessing Skin / LittleSkin 等 authlib-injector 兼容站点)。
 /// 只依赖标准 Yggdrasil 接口:站点根 → /api/yggdrasil → /authserver/authenticate。
@@ -19,11 +22,17 @@ public static class ExternalAuth
 {
     /// <summary>把用户输入的站点域名/地址规范化成 API 根,并确认站点确实支持 authlib-injector。</summary>
     public static async Task<string> ResolveApiRootAsync(HttpClient http, string input, CancellationToken ct)
+        => (await ProbeAsync(http, input, ct).ConfigureAwait(false)).ApiRoot;
+
+    /// <summary>探测站点:规范化地址 → 校验 authlib-injector 元数据 → 返回 API 根与站点名。</summary>
+    public static async Task<ExternalServer> ProbeAsync(HttpClient http, string input, CancellationToken ct)
     {
         var text = (input ?? "").Trim().TrimEnd('/');
         if (text.Length == 0) throw new InvalidOperationException("请填写皮肤站地址");
         if (!text.StartsWith("http", StringComparison.OrdinalIgnoreCase))
             text = "https://" + text;
+        if (!text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("认证服务器必须使用 https");
 
         var candidates = new[]
         {
@@ -44,10 +53,36 @@ public static class ExternalAuth
                     last = new InvalidOperationException($"{(int)resp.StatusCode} {candidate}");
                     continue;
                 }
+                // ALI(API 地址指示):网页响应头指向真正的 API 根
+                // LittleSkin 的拖拽卡片就是一个普通网页链接,靠这个头发现 /api/yggdrasil
+                if (resp.Headers.TryGetValues("X-Authlib-Injector-API-Location", out var aliValues))
+                {
+                    var ali = aliValues.FirstOrDefault();
+                    if (!string.IsNullOrWhiteSpace(ali))
+                    {
+                        var apiRoot = new Uri(new Uri(candidate), ali!.Trim()).ToString().TrimEnd('/');
+                        using var apiResp = await http.GetAsync(apiRoot, cts.Token).ConfigureAwait(false);
+                        if (apiResp.IsSuccessStatusCode)
+                        {
+                            var apiJson = JObject.Parse(await apiResp.Content.ReadAsStringAsync().ConfigureAwait(false));
+                            if (apiJson["meta"] != null || apiJson["skinDomains"] != null)
+                            {
+                                var aliName = apiJson["meta"]?.Value<string>("serverName");
+                                return new ExternalServer(apiRoot,
+                                    string.IsNullOrWhiteSpace(aliName) ? new Uri(apiRoot).Host : aliName!);
+                            }
+                        }
+                    }
+                }
+
                 var json = JObject.Parse(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
                 // authlib-injector 站点根会返回 meta / skinDomains / signaturePublickey
                 if (json["meta"] != null || json["skinDomains"] != null || json["signaturePublickey"] != null)
-                    return candidate;
+                {
+                    var name = json["meta"]?.Value<string>("serverName");
+                    return new ExternalServer(candidate,
+                        string.IsNullOrWhiteSpace(name) ? new Uri(candidate).Host : name!);
+                }
                 last = new InvalidOperationException("该地址没有返回 authlib-injector 站点信息");
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)

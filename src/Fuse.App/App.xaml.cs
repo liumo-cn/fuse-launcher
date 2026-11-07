@@ -17,8 +17,12 @@ public partial class App : Application
     {
         // 单实例:双开会出现两个托盘/组件,还会互相争抢 config 与下载队列
         _singleInstance = new System.Threading.Mutex(true, @"Local\FuseLauncher.SingleInstance", out var isNew);
+        var inviteArg = DeepLink.FindInviteInArgs(e.Args);
         if (!isNew)
         {
+            // 双开但带邀请链接:转发给已运行的实例后退出(协议点开浏览器会拉起第二个进程)
+            if (inviteArg != null)
+                DeepLink.TryForwardToRunningInstance(inviteArg);
             Shutdown(0);
             return;
         }
@@ -36,6 +40,30 @@ public partial class App : Application
         {
             AppServices.Initialize();
             Boot("services initialized");
+
+            // LittleSkin OAuth:client_id 可用环境变量覆盖(应用重置后无需重新打包)
+            Fuse.Core.Accounts.LittleSkinOAuth.Configure(
+                Environment.GetEnvironmentVariable("FUSE_LITTLESKIN_CLIENT_ID"));
+
+            // CurseForge:构建时注入了 Key 才启用(未注入的开源构建自动关闭)
+            var cfTransport = new EmbeddedKeyTransport(AppServices.Http);
+            if (cfTransport.Available)
+            {
+                Fuse.Core.Sources.CurseForgeSource.Configure(cfTransport);
+                Boot("[curseforge] enabled");
+            }
+            else
+            {
+                Boot("[curseforge] disabled (no embedded key)");
+            }
+
+            // 联机深链:注册 fuse-launcher:// 协议 + 常驻管道;启动参数里带邀请就直接弹窗
+            DeepLink.Register();
+            DeepLink.InviteReceived += url => DeepLink.Dispatch(url);
+            DeepLink.StartServer();
+            Boot("[deeplink] registered");
+            if (inviteArg != null)
+                Dispatcher.BeginInvoke(new Action(() => DeepLink.Dispatch(inviteArg)));
         }
         catch (Exception ex)
         {
@@ -229,6 +257,8 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // P2P 好友隧道可能还在给游戏供线:启动器退出时统一收掉
+        MultiplayerP2pRegistry.DisposeAll();
         _tray?.Dispose();
         _singleInstance?.ReleaseMutex();
         _singleInstance?.Dispose();

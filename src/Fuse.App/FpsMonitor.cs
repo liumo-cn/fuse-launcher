@@ -1,15 +1,16 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Fuse.App;
 
 /// <summary>
-/// FPS 监控(PresentMon 可选组件):把 Intel 开源的 PresentMon-x64.exe 指到游戏进程,
-/// 用 -output_csv 逐秒产出帧率数据,我们解析最新值。找不到 exe 或进程退出时 FPS 显示 --。
-/// PresentMon 是外部进程观察(ETW),不注入游戏,反作弊零风险(MIT 协议,来源 https://github.com/GameTechDev/PresentMon)。
+/// FPS 监控(PresentMon 2.x):
+/// 用 --output_stdout 让 PresentMon 把 CSV 行实时写到标准输出,逐行解析 MsBetweenPresents。
+/// (--output_file 是块缓冲的,游戏运行期间文件里没有换行,读不到实时数据。)
+/// PresentMon 是外部 ETW 观察,不注入游戏(MIT,https://github.com/GameTechDev/PresentMon)。
+/// 2.6 起参数只认双横线,且需要管理员或 Performance Log Users 组成员。
 /// </summary>
 public sealed class FpsMonitor : IDisposable
 {
@@ -19,27 +20,28 @@ public sealed class FpsMonitor : IDisposable
     public static bool Available => File.Exists(ExePath);
 
     private Process? _process;
-    private readonly string _csvPath;
-    private Timer? _reader;
+    private int _msIndex = -1;
 
     public float Fps { get; private set; }
 
-    public FpsMonitor()
-    {
-        _csvPath = Path.Combine(Path.GetTempPath(), "fuse-presentmon-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".csv");
-    }
+    /// <summary>PresentMon 报 "access denied" 时为 true:需要管理员或 Performance Log Users。</summary>
+    public bool PermissionDenied { get; private set; }
 
     /// <summary>开始跟踪目标进程(PresentMon 按 PID 过滤)。</summary>
     public bool Start(int pid)
     {
-        if (!Available) return false;
         Stop();
+        if (!Available) return false;
         try
         {
             var psi = new ProcessStartInfo
             {
                 FileName = ExePath,
-                Arguments = "-process_id " + pid + " -output_file \"" + _csvPath + "\" -exclude_dropped -terminate_on_timeout 36000",
+                // 固定会话名 + 启动前清理自己的残留会话:
+                // 被 Kill 的 PresentMon 会留下 ETW 会话,下次启动会报 already running。
+                Arguments = "--process_id " + pid
+                            + " --output_stdout --exclude_dropped --terminate_on_proc_exit"
+                            + " --session_name FuseLauncher --stop_existing_session",
                 CreateNoWindow = true,
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -47,7 +49,34 @@ public sealed class FpsMonitor : IDisposable
             };
             _process = Process.Start(psi);
             if (_process == null) return false;
-            _reader = new Timer(_ => ReadLatest(), null, 1500, 1000);
+
+            var proc = _process;
+            proc.EnableRaisingEvents = true;
+            proc.Exited += (_, _) =>
+            {
+                try { WidgetWindow.Boot("[presentmon] exited code " + proc.ExitCode); }
+                catch (Exception) { }
+            };
+            var stderrLines = 0;
+            proc.ErrorDataReceived += (_, e) =>
+            {
+                var line = e.Data ?? "";
+                if (line.Length > 0 && stderrLines++ < 3)
+                    WidgetWindow.Boot("[presentmon] stderr: " + line);
+                if (line.IndexOf("access denied", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    line.IndexOf("administrative privileges", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    line.IndexOf("Performance Log Users", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    if (!PermissionDenied)
+                    {
+                        PermissionDenied = true;
+                        WidgetWindow.Boot("[presentmon] permission denied (need admin or Performance Log Users)");
+                    }
+                }
+            };
+            proc.OutputDataReceived += (_, e) => ParseLine(e.Data);
+            proc.BeginErrorReadLine();
+            proc.BeginOutputReadLine();
             return true;
         }
         catch (Exception)
@@ -56,52 +85,42 @@ public sealed class FpsMonitor : IDisposable
         }
     }
 
-    /// <summary>读 CSV 最后两行的 MsBetweenPresents 均值 → FPS。</summary>
-    private void ReadLatest()
+    /// <summary>解析一行 CSV:首行定列,后续行取 MsBetweenPresents。</summary>
+    private void ParseLine(string? line)
     {
+        if (string.IsNullOrWhiteSpace(line)) return;
+        line = line!.TrimStart('\uFEFF');
         try
         {
-            if (!File.Exists(_csvPath)) return;
-            using var fs = new FileStream(_csvPath, FileMode.Open, FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            using var reader = new StreamReader(fs);
-            string? line = null, previous = null, header = null;
-            while ((line = reader.ReadLine()) != null)
+            if (_msIndex < 0)
             {
-                if (header == null && line.StartsWith("Application")) header = line;
-                previous = line;
+                if (!line.StartsWith("Application", StringComparison.Ordinal)) return;
+                var columns = line.Split(',');
+                var index = Array.FindIndex(columns,
+                    c => c.Equals("MsBetweenPresents", StringComparison.OrdinalIgnoreCase));
+                if (index < 0)
+                    index = Array.FindIndex(columns,
+                        c => c.Equals("MsBetweenDisplayChange", StringComparison.OrdinalIgnoreCase));
+                _msIndex = index;
+                return;
             }
-            if (previous == null || header == null) return;
-            var columns = header.Split(',');
-            var msIndex = -1;
-            for (var i = 0; i < columns.Length; i++)
-            {
-                // 优先 MsBetweenPresents(呈现间隔),退回 MsBetweenDisplayChange
-                if (columns[i].Equals("MsBetweenPresents", StringComparison.OrdinalIgnoreCase))
-                {
-                    msIndex = i;
-                    break;
-                }
-                if (msIndex < 0 && columns[i].Equals("MsBetweenDisplayChange", StringComparison.OrdinalIgnoreCase))
-                    msIndex = i;
-            }
-            if (msIndex < 0) return;
-            var parts = previous.Split(',');
-            if (msIndex >= parts.Length) return;
-            if (!double.TryParse(parts[msIndex], System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture, out var ms) || ms <= 0) return;
+
+            var parts = line.Split(',');
+            if (_msIndex >= parts.Length) return;
+            if (!double.TryParse(parts[_msIndex], NumberStyles.Float, CultureInfo.InvariantCulture, out var ms) || ms <= 0)
+                return;
             Fps = (float)(1000.0 / ms);
         }
         catch (Exception)
         {
-            // CSV 半截写入/被占用:下个周期重试
+            // 半截行/异常字段:跳过
         }
     }
 
     public void Stop()
     {
-        _reader?.Dispose();
-        _reader = null;
+        Fps = 0;
+        _msIndex = -1;
         try
         {
             if (_process is { HasExited: false }) _process.Kill();
@@ -111,7 +130,6 @@ public sealed class FpsMonitor : IDisposable
         {
         }
         _process = null;
-        try { if (File.Exists(_csvPath)) File.Delete(_csvPath); } catch (IOException) { }
     }
 
     public void Dispose() => Stop();

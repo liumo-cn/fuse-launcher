@@ -49,7 +49,10 @@ public static class ServersDat
         return result;
     }
 
-    /// <summary>写回 servers.dat(总是 gzip 压缩,和游戏一致)。</summary>
+    /// <summary>
+    /// 写回 servers.dat。**必须写未压缩 NBT**:原版用 NbtIo.read 读,遇到 gzip 头(0x1f)
+    /// 会报 "Invalid tag id: 31"(QuickPlay 连接时踩过)。读取仍兼容两种格式。
+    /// </summary>
     public static void Write(string path, IReadOnlyList<ServerEntry> servers)
     {
         using var ms = new MemoryStream();
@@ -58,8 +61,7 @@ public static class ServersDat
         Directory.CreateDirectory(dir);
         var tmp = path + ".tmp";
         using (var fs = File.Create(tmp))
-        using (var gz = new GZipStream(fs, CompressionMode.Compress))
-            ms.WriteTo(gz);
+            ms.WriteTo(fs);
         if (File.Exists(path))
         {
             try { File.Copy(path, path + ".bak", overwrite: true); } catch (IOException) { }

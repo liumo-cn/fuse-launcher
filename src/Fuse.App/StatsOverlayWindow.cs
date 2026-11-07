@@ -26,7 +26,7 @@ public sealed class StatsOverlayWindow : Window
     private readonly SystemMetrics _metrics = new();
     private readonly FpsMonitor _fps = new();
     private readonly DispatcherTimer _timer;
-    private Process? _trackedGame;
+    private int _trackedPid;
 
     private const double PidWidth = 44;   // 每个分段前的小图标宽度
 
@@ -130,6 +130,7 @@ public sealed class StatsOverlayWindow : Window
         Show();
         WidgetWindow.Boot("[overlay] shown, is_visible=" + IsVisible);
         _timer.Start();
+        PresentMonProvisioner.EnsureOnce();
         TrackGameProcess();
         RefreshOnce();
     }
@@ -138,7 +139,7 @@ public sealed class StatsOverlayWindow : Window
     {
         _timer.Stop();
         _fps.Stop();
-        _trackedGame = null;
+        _trackedPid = 0;
         base.Hide();
     }
 
@@ -147,22 +148,58 @@ public sealed class StatsOverlayWindow : Window
     {
         try
         {
-            foreach (var p in Process.GetProcessesByName("javaw"))
+            if (!FpsMonitor.Available)
             {
-                if (p.HasExited) continue;
-                if (ReferenceEquals(p, _trackedGame)) return;
-                _trackedGame?.Dispose();
-                _trackedGame = p;
-                _fps.Start(p.Id);
+                PresentMonProvisioner.EnsureOnce();
+                _fps.Stop();
+                _trackedPid = 0;
                 return;
             }
-            // 没找到游戏:FPS 置空
-            if (_fps.Fps > 0 || _trackedGame != null)
+
+            // 可能有多个 Java 进程(其他启动器/工具):取启动时间最新的那个
+            Process? best = null;
+            var bestStart = DateTime.MinValue;
+            foreach (var name in new[] { "javaw", "java" })
             {
-                _fps.Stop();
-                _trackedGame?.Dispose();
-                _trackedGame = null;
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    try
+                    {
+                        if (p.HasExited) { p.Dispose(); continue; }
+                        var started = p.StartTime;
+                        if (started <= bestStart)
+                        {
+                            p.Dispose();
+                            continue;
+                        }
+                        best?.Dispose();
+                        best = p;
+                        bestStart = started;
+                    }
+                    catch (Exception)
+                    {
+                        p.Dispose();
+                    }
+                }
             }
+
+            if (best == null)
+            {
+                if (_trackedPid != 0)
+                {
+                    _fps.Stop();
+                    _trackedPid = 0;
+                }
+                return;
+            }
+
+            var pid = best.Id;
+            best.Dispose();
+            if (pid == _trackedPid) return;
+
+            _fps.Stop();
+            _fps.Start(pid);
+            _trackedPid = pid;
         }
         catch (Exception)
         {
@@ -175,7 +212,7 @@ public sealed class StatsOverlayWindow : Window
         var sample = _metrics.Sample();
 
         _fpsText.Text = _fps.Fps > 0 ? Math.Round(_fps.Fps) + "" : "--";
-        _gpuText.Text = sample.GpuPercent > 0 ? Math.Round(sample.GpuPercent) + "%" : "--";
+        _gpuText.Text = sample.GpuAvailable ? Math.Round(sample.GpuPercent) + "%" : "--";
         _cpuText.Text = Math.Round(sample.CpuPercent) + "%";
         _memText.Text = sample.MemoryTotalMb > 0
             ? sample.MemoryUsedMb + "M"

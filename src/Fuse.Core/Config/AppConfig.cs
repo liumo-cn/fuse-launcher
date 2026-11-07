@@ -42,6 +42,8 @@ public sealed class AppConfig
     public string? UpdateManifestUrl { get; set; } = DefaultUpdateManifestUrl;
     /// <summary>开机自启动(默认关):写/删 HKCU Run 注册表项。</summary>
     public bool LaunchOnStartup { get; set; } = false;
+    /// <summary>启动前检查模组冲突(缺前置/版本不匹配/重复)。</summary>
+    public bool CheckModConflictsBeforeLaunch { get; set; } = true;
     /// <summary>数据浮窗(实时显示 FPS/GPU/CPU/内存/网速/延迟)。</summary>
     public bool ShowStatsOverlay { get; set; } = false;
     /// <summary>数据浮窗位置(可拖动记忆);-1 = 未设置。</summary>

@@ -180,16 +180,29 @@ public sealed class ChunkedDownloader(HttpClient http)
             if (attempt > 0) await Task.Delay(Math.Min(1500 * attempt, 8000), ct).ConfigureAwait(false);
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, UrlMirror.ForAttempt(url, attempt));
+                var attemptUrl = UrlMirror.ForAttempt(url, attempt);
+                using var request = new HttpRequestMessage(HttpMethod.Get, attemptUrl);
                 request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
                 using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
                     .ConfigureAwait(false);
 
-                if ((int)response.StatusCode == 429)
+                var status = (int)response.StatusCode;
+                if (status == 429)
                 {
                     UrlMirror.NoteThrottled();
                     last = new IOException("429 请求过于频繁");
                     continue;
+                }
+                if (status >= 400 && status != 408)
+                {
+                    // 同一个 URL 上重试 403/404 没意义(403 的响应体还往往只有 1 字节,
+                    // 继续读会被当成“文件大小 1 字节”);但 attempt 本身会换源
+                    // (官方↔镜像 / BMCL↔USTC↔QLU),所以只要下一个 attempt 指向别的地址就继续。
+                    last = new IOException($"服务器返回 HTTP {status}（{response.ReasonPhrase}）");
+                    var nextUrl = attempt < 3 ? UrlMirror.ForAttempt(url, attempt + 1) : null;
+                    if (nextUrl != null && !string.Equals(nextUrl, attemptUrl, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    break;
                 }
 
                 if (response.StatusCode == System.Net.HttpStatusCode.PartialContent)
@@ -207,11 +220,17 @@ public sealed class ChunkedDownloader(HttpClient http)
             {
                 throw;
             }
+            catch (OperationCanceledException ex)
+            {
+                last = new IOException("分块下载超时", ex);
+            }
             catch (Exception ex)
             {
                 last = ex;
             }
         }
+        if (last is IOException io && io.Message.StartsWith("服务器返回 HTTP ", StringComparison.Ordinal))
+            throw io;
         throw new IOException("探测文件大小失败(重试 3 次)", last);
     }
 
@@ -229,12 +248,17 @@ public sealed class ChunkedDownloader(HttpClient http)
             }
             try
             {
+                // 单块超时:防止连接建立后服务端不再发数据,流读取永远挂住(实测 Mojang 分块偶发)
+                using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                chunkCts.CancelAfter(TimeSpan.FromSeconds(120));
+                var chunkToken = chunkCts.Token;
+
                 // Balanced:首次官方,失败后转镜像(熔断期内恒官方)
                 var attemptUrl = UrlMirror.ForAttempt(url, attempt);
                 using var request = new HttpRequestMessage(HttpMethod.Get, attemptUrl);
                 request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(
                     chunk.Offset, chunk.Offset + chunk.Length - 1);
-                using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
+                using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, chunkToken)
                     .ConfigureAwait(false);
                 if ((int)response.StatusCode == 429)
                 {
@@ -247,7 +271,7 @@ public sealed class ChunkedDownloader(HttpClient http)
                 using var target = new FileStream(partPath, FileMode.Open, FileAccess.Write, FileShare.Read,
                     64 * 1024, useAsync: true);
                 target.Seek(chunk.Offset, SeekOrigin.Begin);
-                await stream.CopyToAsync(target, 64 * 1024, ct).ConfigureAwait(false);
+                await stream.CopyToAsync(target, 64 * 1024, chunkToken).ConfigureAwait(false);
 
                 var written = target.Position - chunk.Offset;
                 if (written != chunk.Length)
@@ -258,6 +282,10 @@ public sealed class ChunkedDownloader(HttpClient http)
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (OperationCanceledException ex)
+            {
+                last = new IOException("分块下载超时", ex);
             }
             catch (Exception ex)
             {

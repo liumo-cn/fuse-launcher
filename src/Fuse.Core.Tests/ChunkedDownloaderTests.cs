@@ -110,6 +110,82 @@ public class ChunkedDownloaderTests : IDisposable
                 new ChunkedDownloadOptions { Parallelism = 2, ChunkBytes = 50_000 }));
     }
 
+    /// <summary>
+    /// 回归:官方地址返回 403 时必须继续尝试镜像,而不是把整个下载判死。
+    /// 2026-11-06 的 ProbeAsync 优化曾在 4xx 上直接 break,而 attempt 本身会换源,
+    /// 结果官方 403 再也不会落到镜像(镜像 404/403 也不会再试官方)。
+    /// </summary>
+    [Fact]
+    public async Task Probe_Http403OnOfficial_FallsBackToMirror()
+    {
+        var payload = Payload(300_000);
+        var sha = Sha1(payload);
+        var dest = Path.Combine(_dir, "fallback.jar");
+        var handler = new Official403Handler(payload);
+
+        var oldMode = UrlMirror.Mode;
+        UrlMirror.Mode = UrlMirror.SourceMode.Balanced;
+        try
+        {
+            var downloader = new ChunkedDownloader(new HttpClient(handler));
+            // libraries.minecraft.net 在 Balanced 下 attempt0=官方、attempt1=镜像
+            var result = await downloader.DownloadAsync(
+                "https://libraries.minecraft.net/com/example/fuse-fallback.jar",
+                dest, sha,
+                new ChunkedDownloadOptions { Parallelism = 2, ChunkBytes = 100_000 });
+
+            Assert.True(result.HashVerified);
+            Assert.True(handler.SawOfficial, "应先请求官方源");
+            Assert.True(handler.SawMirror, "官方 403 后应继续请求镜像");
+            Assert.Equal(sha, Sha1(await File.ReadAllBytesAsync(dest)));
+        }
+        finally
+        {
+            UrlMirror.Mode = oldMode;
+        }
+    }
+
+    /// <summary>官方域返回 403;镜像域按 Range 返回 206。用于验证换源重试。</summary>
+    private sealed class Official403Handler : HttpMessageHandler
+    {
+        private readonly byte[] _payload;
+        public bool SawOfficial;
+        public bool SawMirror;
+
+        public Official403Handler(byte[] payload) => _payload = payload;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var uri = request.RequestUri!;
+            if (uri.Host.Equals("libraries.minecraft.net", StringComparison.OrdinalIgnoreCase))
+            {
+                SawOfficial = true;
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)
+                {
+                    Content = new StringContent("blocked"),
+                });
+            }
+
+            SawMirror = true;
+            var range = request.Headers.Range?.Ranges.FirstOrDefault();
+            var start = range?.From ?? 0;
+            var end = range?.To ?? _payload.Length - 1;
+            if (start < 0 || end < start || start >= _payload.Length) end = _payload.Length - 1;
+            var count = (int)Math.Min(end - start + 1, _payload.Length - start);
+            var body = new byte[count];
+            Array.Copy(_payload, start, body, 0, count);
+
+            var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
+            {
+                Content = new ByteArrayContent(body),
+            };
+            response.Content.Headers.ContentRange =
+                new System.Net.Http.Headers.ContentRangeHeaderValue(start, start + count - 1, _payload.Length);
+            return Task.FromResult(response);
+        }
+    }
+
     /// <summary>单线程 Accept 循环 + Range 语义的 HTTP/1.1 存根。</summary>
     private sealed class StubCdn : IDisposable
     {

@@ -15,7 +15,7 @@ public static class InstanceLayout
     /// <summary>实例目录下的专属内容标记：出现任意一个就说明该版本是隔离的。</summary>
     private static readonly string[] IsolatedMarkers =
     {
-        "mods", "saves", "config", "resourcepacks", "shaders", "logs",
+        "mods", "saves", "config", "resourcepacks", "shaderpacks", "shaders", "logs",
         "options.txt", "servers.dat", "screenshots", "crash-reports", "command_history.txt",
     };
 

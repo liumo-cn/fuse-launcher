@@ -216,6 +216,15 @@ public sealed class LaunchPipeline
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                 };
+                // 不要把启动器的密钥类环境变量继承给游戏进程(模组能读到)
+                try
+                {
+                    psi.EnvironmentVariables.Remove("CURSEFORGE_API_KEY");
+                }
+                catch (Exception)
+                {
+                    // 非关键路径
+                }
                 ctx.GameProcess = Process.Start(psi)
                     ?? throw new InvalidOperationException("游戏进程启动失败（Process.Start 返回 null）");
                 ctx.GameProcess.OutputDataReceived += (_, e) => { if (e.Data != null) ctx.LaunchLog.WriteLine(e.Data); };

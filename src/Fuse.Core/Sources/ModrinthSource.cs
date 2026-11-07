@@ -36,6 +36,20 @@ public sealed record ModrinthVersionFile(
 /// </summary>
 public static class ModrinthSource
 {
+
+    /// <summary>Modrinth 项目网页地址(网页跳转按钮用)。</summary>
+    public static string ProjectPageUrl(string slug, string projectType)
+    {
+        var section = projectType switch
+        {
+            "modpack" => "modpack",
+            "shader" => "shader",
+            "resourcepack" => "resourcepack",
+            _ => "mod",
+        };
+        return $"https://modrinth.com/{section}/{slug}";
+    }
+
     public const string ApiBase = "https://api.modrinth.com/v2";
 
     // tag/game_version 只拉一次:版本组展开(见 ExpandGameVersionsAsync)每次搜索都要用
@@ -85,6 +99,7 @@ public static class ModrinthSource
         string category, int offset, int limit, CancellationToken ct,
         string projectType = "mod")
     {
+
         var facets = new JArray();
         var versions = await ExpandGameVersionsAsync(http, gameVersion, ct).ConfigureAwait(false);
         facets.Add(new JArray(versions.Select(v => (object)("versions:" + v)).ToArray()));
@@ -143,12 +158,21 @@ public static class ModrinthSource
         var candidates = await QueryVersionObjectsAsync(http, projectId, gameVersion, loader, ct)
             .ConfigureAwait(false);
         if (candidates.Count == 0) throw NoVersionError(gameVersion, loader);
-        // 版本组展开(26.1 → 26.1/26.1.1/26.1.2…)后,列表按发布时间倒序,
-        // 第一条可能只适配更新的补丁版(实测:Iris 1.11.4 标 26.1.2,要求 Sodium 0.9.x,
-        // 而按"最新 Sodium"拿到的是 0.8.9 → 启动直接报不兼容)。
-        // 先挑 game_versions 明确包含当前版本的条目,没有才退回列表第一条。
-        return ParseVersionFile(candidates.FirstOrDefault(v => MatchesExactGameVersion(v, gameVersion))
-                                ?? candidates[0]);
+        // 版本组展开(26.1 → 26.1/26.1.1/26.1.2…)后,列表按发布时间倒序。
+        // 规则:优先当前版本精确匹配;没有则只接受"不高于当前版本"的构建,
+        // 绝不把 26.1.2 的文件装进 26.1 实例(Iris/Sodium 不兼容的根因)。
+        var exact = candidates.FirstOrDefault(v => MatchesExactGameVersion(v, gameVersion));
+        if (exact != null) return ParseVersionFile(exact);
+
+        var older = candidates
+            .Where(v => HasVersionAtOrBelow(v, gameVersion))
+            .OrderByDescending(v => MaxVersionAtOrBelow(v, gameVersion))
+            .FirstOrDefault();
+        if (older != null) return ParseVersionFile(older);
+
+        throw new InvalidOperationException(
+            $"该模组只提供更新的 Minecraft {gameVersion} 构建（例如 26.1.2），当前实例是 {gameVersion}；" +
+            "请升级游戏版本，或换一个支持当前版本的模组版本。");
     }
 
     /// <summary>
@@ -162,9 +186,40 @@ public static class ModrinthSource
             .ConfigureAwait(false);
         if (candidates.Count == 0) throw NoVersionError(gameVersion, loader);
         return candidates
+            .Where(v => MatchesExactGameVersion(v, gameVersion) || HasVersionAtOrBelow(v, gameVersion))
             .OrderByDescending(v => MatchesExactGameVersion(v, gameVersion))
+            .ThenByDescending(v => MaxVersionAtOrBelow(v, gameVersion))
             .Select(ParseVersionFile)
             .ToList();
+    }
+
+    /// <summary>该版本是否有 game_versions 落在当前版本或更早(不含更新的补丁)。</summary>
+    private static bool HasVersionAtOrBelow(JObject version, string current)
+    {
+        var currentParsed = Fuse.Core.ModConflict.VersionRange.Parse(current);
+        if (currentParsed == null) return false;
+        foreach (var gv in (version["game_versions"] as JArray)?.Values<string>() ?? Enumerable.Empty<string>())
+        {
+            var parsed = Fuse.Core.ModConflict.VersionRange.Parse(gv ?? "");
+            if (parsed != null && parsed.CompareTo(currentParsed) <= 0) return true;
+        }
+        return false;
+    }
+
+    private static int MaxVersionAtOrBelow(JObject version, string current)
+    {
+        var currentParsed = Fuse.Core.ModConflict.VersionRange.Parse(current);
+        var best = -1;
+        if (currentParsed == null) return best;
+        foreach (var gv in (version["game_versions"] as JArray)?.Values<string>() ?? Enumerable.Empty<string>())
+        {
+            var parsed = Fuse.Core.ModConflict.VersionRange.Parse(gv ?? "");
+            if (parsed == null) continue;
+            if (parsed.Major != currentParsed.Major) continue;
+            var key = parsed.Minor * 1000 + parsed.Patch;
+            if (parsed.CompareTo(currentParsed) <= 0 && key > best) best = key;
+        }
+        return best;
     }
 
     private static InvalidOperationException NoVersionError(string gameVersion, string loader)
@@ -223,6 +278,42 @@ public static class ModrinthSource
     }
 
     /// <summary>按精确 version_id 取文件(依赖里指定的"配套版本"用它下载)。</summary>
+    private static readonly Dictionary<string, bool> JarCompatibilityCache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 以 jar 内 fabric.mod.json 的 depends.minecraft 为准判断兼容性。
+    /// Modrinth 的 game_versions 标签可能保守(实测 Sodium 0.9.1 标 26.1.2,但 jar 里根本没有
+    /// minecraft 依赖,在 26.1 上能正常加载);只看标签会把可用组合误判成不兼容。
+    /// </summary>
+    public static async Task<bool> IsJarCompatibleWithMcAsync(
+        HttpClient http, ModrinthVersionFile file, string gameVersion, CancellationToken ct)
+    {
+        if (file.GameVersions.Any(v => v.Equals(gameVersion, StringComparison.OrdinalIgnoreCase)))
+            return true;
+        if (JarCompatibilityCache.TryGetValue(file.Url, out var cached)) return cached;
+        try
+        {
+            using var response = await http.GetAsync(file.Url, ct).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+            using var memory = new MemoryStream(bytes);
+            using var zip = new System.IO.Compression.ZipArchive(memory);
+            var entry = zip.GetEntry("fabric.mod.json");
+            if (entry == null) return false;
+            using var reader = new StreamReader(entry.Open());
+            var mod = JObject.Parse(reader.ReadToEnd());
+            var range = mod["depends"]?["minecraft"]?.ToString();
+            var ok = string.IsNullOrWhiteSpace(range) ||
+                     Fuse.Core.ModConflict.VersionRange.Matches(gameVersion, range);
+            JarCompatibilityCache[file.Url] = ok;
+            return ok;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     public static async Task<ModrinthVersionFile> GetVersionFileByIdAsync(
         HttpClient http, string versionId, CancellationToken ct)
     {
@@ -307,6 +398,102 @@ public static class ModrinthSource
         var record = ParseVersionFile(first);
         return (record, first.Value<string>("version_number") ?? "",
             first.Value<string>("name") ?? first.Value<string>("version_number") ?? "");
+    }
+
+    /// <summary>冲突修复用:按项目 id/slug 找满足版本约束的兼容文件。</summary>
+    public sealed record ResolvedModFile(
+        string ProjectId, string VersionId, string VersionNumber, string FileName, string Url, string Sha1);
+
+    public static async Task<ResolvedModFile?> ResolveCompatibleAsync(
+        HttpClient http, string idOrSlug, string gameVersion, string loader,
+        string? constraint, CancellationToken ct, string? sha1 = null)
+    {
+        try
+        {
+            var candidates = await QueryVersionObjectsAsync(http, idOrSlug, gameVersion, loader, ct)
+                .ConfigureAwait(false);
+            // 冲突修复必须用"明确支持当前 MC 版本"的文件:
+            // 只标 26.1.2 的 Sodium 不能装到 26.1 实例上(会被 Fabric 判定不兼容)。
+            foreach (var obj in candidates.Where(v => MatchesExactGameVersion(v, gameVersion)))
+            {
+                var number = obj.Value<string>("version_number") ?? "";
+                if (!Fuse.Core.ModConflict.VersionRange.MatchesAny(number, constraint)) continue;
+                var file = ParseVersionFile(obj);
+                var versionId = obj.Value<string>("id") ?? "";
+                return new ResolvedModFile(idOrSlug, versionId, number, file.FileName, file.Url, file.Sha1);
+            }
+            return null;
+        }
+        catch (Exception)
+        {
+            // 不是项目 id/slug:用搜索按 mod id 找项目再试一次
+        }
+
+        // 按 jar 的 SHA-1 反查项目(Modrinth 上 mod id 与项目 slug 不一致时最可靠)
+        if (!string.IsNullOrEmpty(sha1))
+        {
+            try
+            {
+                using var fileReq = new HttpRequestMessage(HttpMethod.Get, ApiBase + "/version_file/" + sha1);
+                fileReq.Headers.UserAgent.ParseAdd("FuseLauncher/1.1.1");
+                using var fileResp = await http.SendAsync(fileReq, ct).ConfigureAwait(false);
+                if (fileResp.IsSuccessStatusCode)
+                {
+                    var fileJson = JObject.Parse(await fileResp.Content.ReadAsStringAsync().ConfigureAwait(false));
+                    var projectId = fileJson.Value<string>("project_id");
+                    if (!string.IsNullOrEmpty(projectId))
+                    {
+                        var candidates = await QueryVersionObjectsAsync(http, projectId!, gameVersion, loader, ct)
+                            .ConfigureAwait(false);
+                        foreach (var obj in candidates.Where(v => MatchesExactGameVersion(v, gameVersion)))
+                        {
+                            var number = obj.Value<string>("version_number") ?? "";
+                            if (!Fuse.Core.ModConflict.VersionRange.MatchesAny(number, constraint)) continue;
+                            var file = ParseVersionFile(obj);
+                            return new ResolvedModFile(projectId!, obj.Value<string>("id") ?? "", number,
+                                file.FileName, file.Url, file.Sha1);
+                        }
+                        return null;
+                    }
+                }
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        try
+        {
+            var facets = new JArray
+            {
+                new JArray("project_type:mod"),
+                new JArray("versions:" + gameVersion),
+                new JArray("categories:" + loader),
+            };
+            var url = $"{ApiBase}/search?query={Uri.EscapeDataString(idOrSlug)}&limit=5" +
+                      $"&facets={Uri.EscapeDataString(facets.ToString(Newtonsoft.Json.Formatting.None))}";
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.UserAgent.ParseAdd("FuseLauncher/1.1.1");
+            using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+            var projectId = (json["hits"] as JArray)?.First?["project_id"]?.ToString();
+            if (string.IsNullOrEmpty(projectId)) return null;
+            var candidates = await QueryVersionObjectsAsync(http, projectId!, gameVersion, loader, ct)
+                .ConfigureAwait(false);
+            foreach (var obj in candidates.OrderByDescending(v => MatchesExactGameVersion(v, gameVersion)))
+            {
+                var number = obj.Value<string>("version_number") ?? "";
+                if (!Fuse.Core.ModConflict.VersionRange.MatchesAny(number, constraint)) continue;
+                var file = ParseVersionFile(obj);
+                return new ResolvedModFile(projectId!, obj.Value<string>("id") ?? "", number,
+                    file.FileName, file.Url, file.Sha1);
+            }
+        }
+        catch (Exception)
+        {
+        }
+        return null;
     }
 
     /// <summary>解析前置依赖项目 → 其最新文件(同版本/加载器)。</summary>

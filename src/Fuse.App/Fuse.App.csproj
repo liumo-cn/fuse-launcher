@@ -7,7 +7,7 @@
     <RootNamespace>Fuse.App</RootNamespace>
     <AssemblyName>Fuse Launcher</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <Product>Fuse Launcher</Product>
     <Company>liumo</Company>
     <AssemblyTitle>Fuse Launcher</AssemblyTitle>
@@ -15,6 +15,16 @@
     <ApplicationIcon>Assets\fuse.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
     <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- 不生成 PDB:Release 二进制里连 CodeView 的构建路径(RSDS)都不留,避免泄露本机目录 -->
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="Exists('$(MSBuildProjectDirectory)\Generated\CfKey.g.cs')">
+    <DefineConstants>$(DefineConstants);FUSE_CF_KEY</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>

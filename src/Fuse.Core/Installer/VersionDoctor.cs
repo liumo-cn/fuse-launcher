@@ -14,7 +14,7 @@ public sealed class VersionAudit
     /// <summary>人读的缺失项(如「客户端 jar」「3 个库文件」)。空 = 完好。</summary>
     public List<string> Issues { get; init; } = new();
     public bool NeedsRepair => Issues.Count > 0;
-    /// <summary>修复方式:"vanilla" | "fabric"。</summary>
+    /// <summary>修复方式:"vanilla" | "fabric" | "forge" | "neoforge"。</summary>
     public string Kind { get; init; } = "vanilla";
     /// <summary>底座 MC 版本(vanilla 即自身)。</summary>
     public string GameVersion { get; init; } = "";
@@ -59,10 +59,16 @@ public static class VersionDoctor
         }
         catch (Exception)
         {
+            // 版本 json 丢了/坏了:从 id 猜底座与加载器(canonical id 形如 26.1-fabric-0.20.1),
+            // 让补全至少能把官方 json 重新拉回来;猜不出的在 UI 里明确说"无法自动补全"。
+            var inferred = InferFromVersionId(versionId);
             return new VersionAudit
             {
                 VersionId = versionId,
                 Issues = { "版本文件缺失或损坏(无法读取 version.json)" },
+                Kind = inferred.Kind,
+                GameVersion = inferred.GameVersion,
+                LoaderVersion = inferred.LoaderVersion,
             };
         }
 
@@ -105,27 +111,93 @@ public static class VersionDoctor
             }
         }
 
-        var loader = DetectLoader(version);
+        var loader = DetectLoader(version, versionId);
+        var gameVersion = RootGameVersion(version, versionsRoot);
+        if (string.IsNullOrEmpty(gameVersion))
+            gameVersion = InferFromVersionId(versionId).GameVersion;
         return new VersionAudit
         {
             VersionId = versionId,
             Issues = issues,
-            Kind = loader != null ? "fabric" : "vanilla",
-            GameVersion = RootGameVersion(version, versionsRoot),
-            LoaderVersion = loader,
+            Kind = loader.Kind,
+            GameVersion = gameVersion,
+            LoaderVersion = loader.LoaderVersion,
         };
     }
 
-    /// <summary>从合并后的 libraries 里找 fabric-loader 版本号。</summary>
-    private static string? DetectLoader(McVersion version)
+    private sealed record LoaderInfo(string Kind, string? LoaderVersion);
+
+    /// <summary>
+    /// 从合并后的 libraries 识别加载器与版本。Forge/NeoForge 的坐标在不同年代不一样
+    /// (forge / fmlloader / neoforge / fancymodloader),识别不出时退回按 canonical id 解析。
+    /// </summary>
+    private static LoaderInfo DetectLoader(McVersion version, string versionId)
     {
-        const string prefix = "net.fabricmc:fabric-loader:";
-        foreach (var lib in version.Libraries)
+        var libs = version.Libraries;
+        const string fabricPrefix = "net.fabricmc:fabric-loader:";
+        var fabric = libs.FirstOrDefault(l => l.Name != null &&
+            l.Name.StartsWith(fabricPrefix, StringComparison.OrdinalIgnoreCase));
+        if (fabric != null)
+            return new LoaderInfo("fabric", fabric.Name.Substring(fabricPrefix.Length));
+
+        var neoforge = libs.FirstOrDefault(l => l.Name != null &&
+            l.Name.StartsWith("net.neoforged:neoforge:", StringComparison.OrdinalIgnoreCase));
+        if (neoforge != null)
+            return new LoaderInfo("neoforge", AfterLastColon(neoforge.Name));
+
+        var forge = libs.FirstOrDefault(l => l.Name != null &&
+            l.Name.StartsWith("net.minecraftforge:forge:", StringComparison.OrdinalIgnoreCase));
+        if (forge != null)
+            return new LoaderInfo("forge", AfterLastColon(forge.Name));
+
+        // 现代 Forge 没有 net.minecraftforge:forge 主条目:fmlloader 的版本是 "1.20.1-47.4.10"
+        var fml = libs.FirstOrDefault(l => l.Name != null &&
+            l.Name.StartsWith("net.minecraftforge:fmlloader:", StringComparison.OrdinalIgnoreCase));
+        if (fml != null)
         {
-            if (lib.Name != null && lib.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                return lib.Name.Substring(prefix.Length);
+            var raw = AfterLastColon(fml.Name);
+            var dash = raw.IndexOf('-');
+            return new LoaderInfo("forge", dash >= 0 ? raw.Substring(dash + 1) : raw);
         }
-        return null;
+
+        // 库清单认不出(比如版本 json 只有 inheritsFrom):按 id 解析
+        var inferred = InferFromVersionId(versionId);
+        return inferred.Kind == "vanilla"
+            ? new LoaderInfo("vanilla", null)
+            : new LoaderInfo(inferred.Kind, inferred.LoaderVersion);
+    }
+
+    private static string AfterLastColon(string coord)
+    {
+        var idx = coord.LastIndexOf(':');
+        return idx >= 0 && idx + 1 < coord.Length ? coord.Substring(idx + 1) : coord;
+    }
+
+    private sealed record InferredLoader(string Kind, string GameVersion, string? LoaderVersion);
+
+    /// <summary>按常见版本 id 形态推断:<mc>-fabric-&lt;ver&gt; / -forge- / -neoforge-;纯版本号视为原版。</summary>
+    private static InferredLoader InferFromVersionId(string versionId)
+    {
+        foreach (var (marker, kind) in new[]
+                 {
+                     ("-neoforge-", "neoforge"),
+                     ("-fabric-", "fabric"),
+                     ("-forge-", "forge"),
+                 })
+        {
+            var idx = versionId.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (idx > 0)
+            {
+                var game = versionId.Substring(0, idx);
+                var loader = versionId.Substring(idx + marker.Length);
+                if (loader.Length > 0)
+                    return new InferredLoader(kind, game, loader);
+            }
+        }
+        // 纯版本号(26.3 / 1.20.1):当作原版;modpack 自定义 id 猜不出底座,GameVersion 留空
+        var looksVanilla = versionId.Length > 0 &&
+            (char.IsDigit(versionId[0]) || versionId.StartsWith("v", StringComparison.OrdinalIgnoreCase));
+        return new InferredLoader("vanilla", looksVanilla ? versionId : "", null);
     }
 
     /// <summary>沿 inheritsFrom 找到最底层的原版版本号。</summary>

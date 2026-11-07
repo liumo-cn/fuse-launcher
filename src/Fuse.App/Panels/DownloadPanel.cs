@@ -55,6 +55,7 @@ public class DownloadPanel : UserControl
     private bool _packLoading;
     private int _packToken;
     private readonly List<Fuse.Core.Sources.ModrinthHit> _packHits = new();
+    private string _packSource = "modrinth";
     private StackPanel? _packList;
     private ScrollViewer? _packScroll;
     private Border? _packTypeOverlay;
@@ -502,6 +503,42 @@ public class DownloadPanel : UserControl
         };
         _root.Children.Add(search);
 
+        // 下载源:Modrinth / CurseForge(整合包)
+        var srcRow = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        foreach (var (label, key) in new[] { ("Modrinth", "modrinth"), ("CurseForge", "curseforge") })
+        {
+            var chip = new Button
+            {
+                Content = label,
+                Style = (Style)Application.Current.Resources["ChipButton"],
+                Padding = new Thickness(12, 6, 12, 6),
+                Margin = new Thickness(0, 0, 8, 0),
+                Background = _packSource == key
+                    ? null
+                    : new SolidColorBrush(Color.FromArgb(15, 255, 255, 255)),
+            };
+            if (_packSource == key) chip.SetResourceReference(Button.BackgroundProperty, "AccentChipBrush");
+            if (key == "curseforge" && !CurseForgeSource.IsConfigured)
+            {
+                chip.Opacity = 0.45;
+                chip.IsEnabled = false;
+            }
+            System.Windows.Automation.AutomationProperties.SetName(chip, "整合包源 " + label);
+            chip.Click += (_, _) =>
+            {
+                if (_packSource == key) return;
+                _packSource = key;
+                _packCategory = "全部";
+                Rebuild();
+            };
+            srcRow.Children.Add(chip);
+        }
+        _root.Children.Add(srcRow);
+
         // 类型行 + 浮层(与模组页同款交互)
         var typeRowOuter = new Border
         {
@@ -669,9 +706,25 @@ public class DownloadPanel : UserControl
         {
             try
             {
-                var (hits, total) = await Fuse.Core.Sources.ModrinthSource.SearchAsync(
-                    AppServices.Http, query, "", "", category, offset, 20,
-                    CancellationToken.None, "modpack").ConfigureAwait(false);
+                List<Fuse.Core.Sources.ModrinthHit> hits;
+                int total;
+                if (_packSource == "curseforge")
+                {
+                    var cf = await CurseForgeSource.SearchAsync(
+                        query, "", "", category, offset, 20, CancellationToken.None, "modpack").ConfigureAwait(false);
+                    hits = cf.Hits.Select(h => new Fuse.Core.Sources.ModrinthHit(
+                        h.Id.ToString(), h.Slug, h.Name, h.Summary, h.Downloads,
+                        "modpack", h.IconUrl ?? "", "")).ToList();
+                    total = cf.Total;
+                }
+                else
+                {
+                    var r = await Fuse.Core.Sources.ModrinthSource.SearchAsync(
+                        AppServices.Http, query, "", "", category, offset, 20,
+                        CancellationToken.None, "modpack").ConfigureAwait(false);
+                    hits = r.Hits;
+                    total = r.Total;
+                }
                 await Dispatcher.InvokeAsync(new Action(() =>
                 {
                     if (gen != _generation || token != _packToken || _packList == null) return;
@@ -741,7 +794,9 @@ public class DownloadPanel : UserControl
         var date = hit.DateModified.Length >= 10 ? hit.DateModified.Substring(0, 10) : hit.DateModified;
         info.Children.Add(new TextBlock
         {
-            Text = $"{FormatCount(hit.Downloads)} 下载 · {date} · Modrinth 整合包",
+            Text = date.Length > 0
+                ? $"{FormatCount(hit.Downloads)} 下载 · {date} · {(_packSource == "curseforge" ? "CurseForge" : "Modrinth")} 整合包"
+                : $"{FormatCount(hit.Downloads)} 下载 · {(_packSource == "curseforge" ? "CurseForge" : "Modrinth")} 整合包",
             FontSize = 10.5, Foreground = T2, Opacity = 0.66,
         });
         Grid.SetColumn(info, 1);
@@ -775,6 +830,30 @@ public class DownloadPanel : UserControl
     {
         if (marker.Tag is "busy") return;
         marker.Tag = "busy";
+        if (_packSource == "curseforge")
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await DownloadCurseForgePackAsync(hit).ConfigureAwait(false);
+                    await Dispatcher.InvokeAsync(new Action(() =>
+                    {
+                        marker.Tag = null;
+                        Toast("正在解析 CurseForge 整合包:" + hit.Title);
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    await Dispatcher.InvokeAsync(new Action(() =>
+                    {
+                        marker.Tag = null;
+                        Toast("下载失败:" + ex.Message);
+                    }));
+                }
+            });
+            return;
+        }
         _ = Task.Run(async () =>
         {
             try
@@ -850,6 +929,132 @@ public class DownloadPanel : UserControl
         });
     }
 
+
+    /// <summary>
+    /// CurseForge 整合包:下载 pack zip → 按 manifest 解析每个文件的 downloadUrl →
+    /// 合成等价 .mrpack(overrides 原样保留)→ 复用现有 modpack-install 全自动安装。
+    /// </summary>
+    private async Task DownloadCurseForgePackAsync(Fuse.Core.Sources.ModrinthHit hit)
+    {
+        if (!CurseForgeSource.IsConfigured)
+            throw new InvalidOperationException("CurseForge 未启用");
+        if (!int.TryParse(hit.ProjectId, out var projectId))
+            throw new InvalidOperationException("整合包 id 无效");
+
+        var files = await CurseForgeSource.GetFilesAsync(projectId, "", "", CancellationToken.None)
+            .ConfigureAwait(false);
+        var main = files.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f.DownloadUrl));
+        if (main == null)
+            throw new InvalidOperationException("作者未授权第三方下载，请在网页中打开");
+
+        var temp = Path.Combine(Path.GetTempPath(), "fuse-cfpack-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+        var zipPath = Path.Combine(temp, "pack.zip");
+        using (var resp = await AppServices.Http.GetAsync(main.DownloadUrl, CancellationToken.None).ConfigureAwait(false))
+        {
+            resp.EnsureSuccessStatusCode();
+            using var input = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
+            using var output = File.Create(zipPath);
+            await input.CopyToAsync(output).ConfigureAwait(false);
+        }
+
+        string gameVersion, loaderKey, loaderVersion;
+        var indexFiles = new Newtonsoft.Json.Linq.JArray();
+        using (var zip = System.IO.Compression.ZipFile.OpenRead(zipPath))
+        {
+            var manifestEntry = zip.GetEntry("manifest.json")
+                                ?? throw new InvalidOperationException("整合包缺少 manifest.json");
+            Newtonsoft.Json.Linq.JObject manifest;
+            using (var reader = new StreamReader(manifestEntry.Open()))
+                manifest = Newtonsoft.Json.Linq.JObject.Parse(reader.ReadToEnd());
+
+            gameVersion = manifest["minecraft"]?["version"]?.ToString() ?? "";
+            var loaderId = (manifest["minecraft"]?["modLoaders"] as Newtonsoft.Json.Linq.JArray)?
+                .First?["id"]?.ToString() ?? "";
+            var dash = loaderId.IndexOf('-');
+            loaderKey = dash > 0 ? loaderId.Substring(0, dash) : "";
+            loaderVersion = dash > 0 ? loaderId.Substring(dash + 1) : "";
+
+            foreach (var f in (manifest["files"] as Newtonsoft.Json.Linq.JArray) ?? new Newtonsoft.Json.Linq.JArray())
+            {
+                var pid = f.Value<int?>("projectID") ?? 0;
+                var fid = f.Value<int?>("fileID") ?? 0;
+                if (pid == 0 || fid == 0) continue;
+                try
+                {
+                    var meta = await CurseForgeSource.GetFileAsync(pid, fid, CancellationToken.None, skipRateLimit: true)
+                        .ConfigureAwait(false);
+                    if (string.IsNullOrWhiteSpace(meta.DownloadUrl)) continue;
+                    indexFiles.Add(new Newtonsoft.Json.Linq.JObject
+                    {
+                        ["path"] = "mods/" + meta.FileName,
+                        ["hashes"] = new Newtonsoft.Json.Linq.JObject { ["sha1"] = meta.Sha1 ?? "" },
+                        ["downloads"] = new Newtonsoft.Json.Linq.JArray(meta.DownloadUrl!),
+                        ["fileSize"] = meta.FileLength,
+                    });
+                }
+                catch (Exception)
+                {
+                    // 单个文件解析失败不阻断整包
+                }
+            }
+        }
+
+        var index = new Newtonsoft.Json.Linq.JObject
+        {
+            ["formatVersion"] = 1,
+            ["game"] = "minecraft",
+            ["versionId"] = main.DisplayName,
+            ["name"] = hit.Title,
+            ["dependencies"] = new Newtonsoft.Json.Linq.JObject
+            {
+                ["minecraft"] = gameVersion,
+                [loaderKey] = loaderVersion,
+            },
+            ["files"] = indexFiles,
+        };
+
+        var mrpackPath = Path.Combine(temp, "pack.mrpack");
+        using (var source = System.IO.Compression.ZipFile.OpenRead(zipPath))
+        using (var dest = System.IO.Compression.ZipFile.Open(mrpackPath, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            var indexEntry = dest.CreateEntry("modrinth.index.json");
+            using (var w = new StreamWriter(indexEntry.Open()))
+                w.Write(index.ToString());
+            foreach (var entry in source.Entries)
+            {
+                if (string.IsNullOrEmpty(entry.Name)) continue;
+                if (!entry.FullName.StartsWith("overrides/", StringComparison.OrdinalIgnoreCase) &&
+                    !entry.FullName.StartsWith("client-overrides/", StringComparison.OrdinalIgnoreCase)) continue;
+                var copy = dest.CreateEntry(entry.FullName);
+                using var es = entry.Open();
+                using var ds = copy.Open();
+                await es.CopyToAsync(ds).ConfigureAwait(false);
+            }
+        }
+
+        var packVersionId = DownloadQueue.SanitizePackVersionId(hit.Slug, main.DisplayName);
+        var metaJson = new Newtonsoft.Json.Linq.JObject
+        {
+            ["mrpackUrl"] = main.DownloadUrl,
+            ["mrpackLocalPath"] = mrpackPath,
+            ["packSlug"] = hit.Slug,
+            ["versionNumber"] = main.DisplayName,
+            ["title"] = hit.Title,
+            ["versionsRoot"] = AppServices.VersionsRoot,
+            ["librariesRoot"] = AppServices.LibrariesRoot,
+            ["assetsRoot"] = AppServices.AssetsRoot,
+            ["instancesRoot"] = Path.Combine(AppServices.ActiveGameDirectory, "instances"),
+            ["instanceDir"] = AppServices.InstanceDirectoryIn(AppServices.ActiveGameDirectory, packVersionId),
+        }.ToString();
+        var task = AppServices.Queue!.Enqueue(new DownloadTaskRecord
+        {
+            Name = hit.Title,
+            Kind = "modpack-install",
+            Meta = metaJson,
+        });
+        DownloadFocus.Register(task.TaskId, _panelKind);
+    }
 
     private void Rebuild()
     {

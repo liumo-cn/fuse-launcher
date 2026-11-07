@@ -25,7 +25,7 @@ namespace Fuse.Core.Installer;
 /// </summary>
 public static class ModLoaderInstaller
 {
-    private static readonly TimeSpan OfficialTimeout = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan OfficialTimeout = TimeSpan.FromSeconds(90);
 
     /// <summary>加载器类型。Mirrors 按优先级排列,官方超时/失败时依次尝试。</summary>
     public sealed record LoaderFlavor(
@@ -545,6 +545,8 @@ public static class ModLoaderInstaller
                 }
             }
         }
+        if (last is OperationCanceledException)
+            throw new TimeoutException("下载加载器安装包超时(所有下载源都失败)", last);
         throw last ?? new HttpRequestException("所有下载源均不可用");
     }
 

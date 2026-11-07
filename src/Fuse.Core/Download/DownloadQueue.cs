@@ -316,8 +316,10 @@ public sealed class DownloadQueue
             record.Progress = 1;
             record.FinishedAt = DateTime.Now;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
+            // 只有"用户主动暂停/取消"才是 Paused;HttpClient 超时抛的 TaskCanceledException
+            // 必须走 Failed,否则任务静默停在 3% —— 用户看到的就是"检测到了但从来不补全"。
             record.Status = DownloadTaskStatus.Paused;
         }
         catch (Exception ex)

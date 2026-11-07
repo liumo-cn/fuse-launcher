@@ -53,6 +53,14 @@
       <!-- 成功爆闪:白色覆盖层,平时全透明,由启动特效每帧驱动不透明度 -->
       <Ellipse x:Name="OrbFlash" Fill="#FFFFFFFF" Opacity="0" IsHitTestVisible="False"/>
       </Grid>
+
+      <!-- 拖入认证服务器时的提示(不参与命中测试) -->
+      <Border x:Name="DropHint" Visibility="Collapsed" IsHitTestVisible="False"
+              VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,4"
+              Background="#E61A1230" BorderBrush="#806E52E0" BorderThickness="1"
+              CornerRadius="10" Padding="10,5">
+        <TextBlock Text="松开以添加认证服务器" FontSize="11" Foreground="#FFF2EEFF"/>
+      </Border>
     </Grid>
 
     <!-- 启动特效层:能量环 / 成功闪光 / 火花(盖在 SafeArea 之上,不参与命中) -->

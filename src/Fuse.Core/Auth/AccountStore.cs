@@ -31,6 +31,7 @@ public sealed class AccountStore
         public string? AccessToken { get; set; }
         public string? ClientToken { get; set; }
         public string? PasswordEncrypted { get; set; }
+        public string? OAuthRefreshEncrypted { get; set; }
         public string? MsRefreshTokenEncrypted { get; set; }
         public DateTime LastUsedAt { get; set; } = DateTime.Now;
 
@@ -63,6 +64,8 @@ public sealed class AccountStore
         public string? ExtClientToken { get; set; }
         /// <summary>DPAPI 加密后的登录密码(每次启动用它静默换新 token)。</summary>
         public string? ExtPasswordEncrypted { get; set; }
+        /// <summary>DPAPI 加密后的 LittleSkin OAuth refresh token(免密码登录)。</summary>
+        public string? ExtOAuthRefreshEncrypted { get; set; }
 
         /// <summary>已保存的账号列表(多账号切换),以及当前账号 id。</summary>
         public List<AccountEntry> Accounts { get; set; } = new();
@@ -101,6 +104,7 @@ public sealed class AccountStore
                 entry.AccessToken = d.ExtAccessToken;
                 entry.ClientToken = d.ExtClientToken;
                 entry.PasswordEncrypted = d.ExtPasswordEncrypted;
+                entry.OAuthRefreshEncrypted = d.ExtOAuthRefreshEncrypted;
                 break;
             case "msa":
                 entry.DisplayName = d.MsPlayerName ?? "正版账号";
@@ -134,6 +138,7 @@ public sealed class AccountStore
                 Data.ExtAccessToken = entry.AccessToken;
                 Data.ExtClientToken = entry.ClientToken;
                 Data.ExtPasswordEncrypted = entry.PasswordEncrypted;
+                Data.ExtOAuthRefreshEncrypted = entry.OAuthRefreshEncrypted;
                 break;
             case "msa":
                 Data.MsPlayerName = entry.DisplayName;
@@ -296,6 +301,41 @@ public sealed class AccountStore
         Data.ExtAccessToken = session.AccessToken;
         Data.ExtClientToken = session.ClientToken;
         UpsertCurrent();
+        Save();
+    }
+
+    /// <summary>保存一个 LittleSkin OAuth 账号(不存密码,只存 refresh token)。</summary>
+    public void UseExternalOAuth(string apiRoot, string userName, ExternalSession session, string? oauthRefreshToken)
+    {
+        var existing = Data.Accounts.FirstOrDefault(a =>
+            a.Type == "external"
+            && string.Equals(a.UserName, userName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(a.ApiRoot, apiRoot, StringComparison.OrdinalIgnoreCase));
+        Data.CurrentAccountId = existing?.Id;
+        Data.ActiveType = "external";
+        Data.ExtApiRoot = apiRoot;
+        Data.ExtUserName = userName;
+        Data.ExtPasswordEncrypted = null;
+        Data.ExtOAuthRefreshEncrypted = string.IsNullOrEmpty(oauthRefreshToken)
+            ? null
+            : Protect(oauthRefreshToken!);
+        Data.ExtPlayerName = session.PlayerName;
+        Data.ExtUuid = session.Uuid;
+        Data.ExtAccessToken = session.AccessToken;
+        Data.ExtClientToken = session.ClientToken;
+        UpsertCurrent();
+        Save();
+    }
+
+    public string? GetExternalOAuthRefresh()
+    {
+        if (Data.ExtOAuthRefreshEncrypted == null) return null;
+        return Unprotect(Data.ExtOAuthRefreshEncrypted!);
+    }
+
+    public void UpdateExternalOAuth(string? refreshToken)
+    {
+        Data.ExtOAuthRefreshEncrypted = string.IsNullOrEmpty(refreshToken) ? null : Protect(refreshToken!);
         Save();
     }
 

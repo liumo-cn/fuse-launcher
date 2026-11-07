@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Fuse.Core.Config;
 using Fuse.Core.Java;
 using Microsoft.Win32;
@@ -236,6 +237,7 @@ public class SettingsPanel : UserControl
         root.Children.Add(Wrap("autoRunRow", autoRunRow, out _));
         _autoRunToggle = autoRunToggle;
 
+
         // 4c2 数据浮窗 Toggle(一行显示 FPS/GPU/CPU/内存/网速/延迟)
         var overlayRow = new Grid();
         overlayRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -259,8 +261,39 @@ public class SettingsPanel : UserControl
         overlayRow.Children.Add(overlayToggle);
         overlayToggle.Checked += (_, _) => SetStatsOverlay(true);
         overlayToggle.Unchecked += (_, _) => SetStatsOverlay(false);
-        root.Children.Add(Wrap("overlayRow", overlayRow, out _));
+
+        // FPS 依赖 PresentMon + ETW 权限:在开关下面给一行状态与显式提权入口
+        var overlayStack = new StackPanel();
+        overlayStack.Children.Add(overlayRow);
+        overlayStack.Children.Add(BuildFpsStatusRow());
+        root.Children.Add(Wrap("overlayRow", overlayStack, out _));
         _overlayToggle = overlayToggle;
+
+        // 4c3 启动前检查模组冲突
+        var conflictRow = new Grid();
+        conflictRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        conflictRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var conflictInfo = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        conflictInfo.Children.Add(new TextBlock { Text = "启动前检查模组冲突", FontSize = 12.5, FontWeight = FontWeights.SemiBold, Foreground = T2 });
+        conflictInfo.Children.Add(new TextBlock
+        {
+            Text = "发现缺前置 / 版本不匹配 / 重复安装时先弹修复方案，避免进游戏才报错",
+            FontSize = 10.5, Foreground = T2, Opacity = 0.66, TextWrapping = TextWrapping.Wrap,
+        });
+        Grid.SetColumn(conflictInfo, 0);
+        conflictRow.Children.Add(conflictInfo);
+        var conflictToggle = new CheckBox
+        {
+            Style = (Style)Application.Current.Resources["GlassToggle"],
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(conflictToggle, "启动前检查模组冲突");
+        Grid.SetColumn(conflictToggle, 1);
+        conflictRow.Children.Add(conflictToggle);
+        conflictToggle.Checked += (_, _) => { AppServices.Config.CheckModConflictsBeforeLaunch = true; Save(); };
+        conflictToggle.Unchecked += (_, _) => { AppServices.Config.CheckModConflictsBeforeLaunch = false; Save(); };
+        root.Children.Add(Wrap("conflictRow", conflictRow, out _));
+        _conflictToggle = conflictToggle;
 
         // 4d 进程优先级手风琴(高/正常/低):启动后应用到 MC 进程,调整 CPU 资源分配
         // 注意:卡片本身(OptRow)已有 14,10 内边距,这里不能再加外边距,否则文字比别的卡片缩进一截
@@ -513,44 +546,29 @@ public class SettingsPanel : UserControl
             // 原版补全需要官方清单里的 url/sha1
             var manifest = await Fuse.Core.Sources.MojangSource
                 .FetchManifestAsync(AppServices.Http, System.Threading.CancellationToken.None);
+            var manifestIds = new HashSet<string>(manifest.Select(v => v.Id), StringComparer.OrdinalIgnoreCase);
 
+            var queuedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var skipped = new List<string>();
             var queued = 0;
-            foreach (var a in broken)
-            {
-                if (a.Kind == "fabric" && !string.IsNullOrEmpty(a.LoaderVersion))
-                {
-                    var meta = Newtonsoft.Json.JsonConvert.SerializeObject(new
-                    {
-                        gameVersion = a.GameVersion,
-                        loaderVersion = a.LoaderVersion,
-                        versionsRoot = AppServices.VersionsRoot,
-                        librariesRoot = AppServices.LibrariesRoot,
-                        assetsRoot = AppServices.AssetsRoot,
-                        gameDirectory = AppServices.InstanceDirectory(a.VersionId),
-                    });
-                    AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
-                    {
-                        Name = $"{a.VersionId}(补全)",
-                        Kind = "fabric-install",
-                        Meta = meta,
-                    });
-                    queued++;
-                    continue;
-                }
 
-                var entry = manifest.FirstOrDefault(v => v.Id == a.GameVersion);
-                if (entry == null) continue;
+            void QueueVanilla(string gameVersion)
+            {
+                var key = "vanilla:" + gameVersion;
+                if (!queuedKeys.Add(key)) return;
+                var entry = manifest.FirstOrDefault(v => string.Equals(v.Id, gameVersion, StringComparison.OrdinalIgnoreCase));
+                if (entry == null) return;
                 var vanillaMeta = Newtonsoft.Json.JsonConvert.SerializeObject(new
                 {
-                    versionId = a.GameVersion,
+                    versionId = gameVersion,
                     versionsRoot = AppServices.VersionsRoot,
                     librariesRoot = AppServices.LibrariesRoot,
                     assetsRoot = AppServices.AssetsRoot,
-                    gameDirectory = AppServices.InstanceDirectory(a.VersionId),
+                    gameDirectory = AppServices.InstanceDirectory(gameVersion),
                 });
                 AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
                 {
-                    Name = $"{a.VersionId}(补全)",
+                    Name = $"{gameVersion}(补全)",
                     Kind = "vanilla-install",
                     SourceUrl = entry.Url,
                     ExpectedHash = entry.Sha1,
@@ -559,11 +577,68 @@ public class SettingsPanel : UserControl
                 queued++;
             }
 
+            void QueueLoader(string kind, string gameVersion, string loaderVersion, string versionId)
+            {
+                var key = kind + ":" + gameVersion + ":" + loaderVersion;
+                if (!queuedKeys.Add(key)) return;
+                var meta = Newtonsoft.Json.JsonConvert.SerializeObject(new
+                {
+                    gameVersion,
+                    loaderVersion,
+                    versionsRoot = AppServices.VersionsRoot,
+                    librariesRoot = AppServices.LibrariesRoot,
+                    assetsRoot = AppServices.AssetsRoot,
+                    gameDirectory = AppServices.InstanceDirectory(versionId),
+                });
+                AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+                {
+                    Name = $"{gameVersion}-{kind}-{loaderVersion}(补全)",
+                    Kind = kind + "-install",
+                    Meta = meta,
+                });
+                queued++;
+            }
+
+            foreach (var a in broken)
+            {
+                var game = a.GameVersion;
+                // json 损坏时 VersionDoctor 已尽量从 id 推断;再兜底:id 本身在官方清单里
+                if (string.IsNullOrEmpty(game) && manifestIds.Contains(a.VersionId))
+                    game = a.VersionId;
+
+                if (string.IsNullOrEmpty(game))
+                {
+                    skipped.Add($"{a.VersionId}:认不出是哪个游戏版本,无法自动补全(请重新安装该版本或整合包)");
+                    continue;
+                }
+
+                var isLoader = a.Kind is "fabric" or "forge" or "neoforge"
+                    && !string.IsNullOrEmpty(a.LoaderVersion);
+                // 原版底座:补客户端 jar / 官方库 / 资源;加载器版本先补底座再补加载器
+                if (manifestIds.Contains(game))
+                    QueueVanilla(game);
+                else if (!isLoader)
+                {
+                    skipped.Add($"{a.VersionId}:官方清单里没有 {game},无法自动补全");
+                    continue;
+                }
+
+                if (isLoader)
+                    QueueLoader(a.Kind, game, a.LoaderVersion!, a.VersionId);
+            }
+
             if (_repairHint != null)
             {
-                var detail = string.Join("\n", broken.Take(4).Select(a => $"· {a.VersionId}:{a.Summary}"));
-                if (broken.Count > 4) detail += $"\n· 另有 {broken.Count - 4} 个版本";
-                _repairHint.Text = $"发现 {broken.Count} 个版本缺文件,已加入 {queued} 个补全任务:\n{detail}";
+                var detail = string.Join(Environment.NewLine,
+                    broken.Take(4).Select(a => $"· {a.VersionId}:{a.Summary}"));
+                if (broken.Count > 4) detail += Environment.NewLine + $"· 另有 {broken.Count - 4} 个版本";
+                var text = $"发现 {broken.Count} 个版本缺文件,已加入 {queued} 个补全任务(进度见「任务」页):" +
+                    Environment.NewLine + detail;
+                if (skipped.Count > 0)
+                    text += Environment.NewLine + Environment.NewLine + "无法自动补全:" +
+                        Environment.NewLine + "· " +
+                        string.Join(Environment.NewLine + "· ", skipped.Take(3));
+                _repairHint.Text = text;
             }
         }
         catch (Exception ex)
@@ -652,6 +727,7 @@ public class SettingsPanel : UserControl
                 _autoUpdateToggle!.IsChecked = c.AutoUpdate;
                 _autoRunToggle!.IsChecked = c.LaunchOnStartup;
                 _overlayToggle!.IsChecked = c.ShowStatsOverlay;
+                _conflictToggle!.IsChecked = c.CheckModConflictsBeforeLaunch;
             }
             finally
             {
@@ -726,7 +802,69 @@ public class SettingsPanel : UserControl
     }
 
     private CheckBox? _overlayToggle;
+    private CheckBox? _conflictToggle;
     private bool _syncingOverlayToggle;
+
+    private TextBlock? _fpsStatusText;
+    private Button? _fpsAdminButton;
+
+    private Grid BuildFpsStatusRow()
+    {
+        var row = new Grid
+        {
+            Margin = new Thickness(0, 8, 0, 0),
+        };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        _fpsStatusText = new TextBlock
+        {
+            FontSize = 10.5,
+            Foreground = T2,
+            Opacity = 0.7,
+            TextWrapping = TextWrapping.Wrap,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(_fpsStatusText, 0);
+        row.Children.Add(_fpsStatusText);
+
+        _fpsAdminButton = new Button
+        {
+            Content = "以管理员重启",
+            Style = (Style)Application.Current.Resources["ChipButton"],
+            Padding = new Thickness(10, 4, 10, 4),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(_fpsAdminButton, "以管理员重启");
+        _fpsAdminButton.Click += (_, _) =>
+        {
+            if (!ElevationStatus.RestartAsAdministrator())
+                _fpsStatusText!.Text = "已取消提权（UAC 被拒绝）";
+        };
+        Grid.SetColumn(_fpsAdminButton, 1);
+        row.Children.Add(_fpsAdminButton);
+        RefreshFpsStatus();
+        return row;
+    }
+
+    private void RefreshFpsStatus()
+    {
+        if (_fpsStatusText == null || _fpsAdminButton == null) return;
+        if (!FpsMonitor.Available)
+        {
+            _fpsStatusText.Text = "FPS 组件未安装：首次开启浮窗时会自动下载";
+            _fpsAdminButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+        if (!ElevationStatus.CanTraceFps)
+        {
+            _fpsStatusText.Text = "FPS 需要管理员权限或 Performance Log Users 组成员";
+            _fpsAdminButton.Visibility = Visibility.Visible;
+            return;
+        }
+        _fpsStatusText.Text = "FPS 权限正常";
+        _fpsAdminButton.Visibility = Visibility.Collapsed;
+    }
 
     /// <summary>数据浮窗开关:开启即创建浮窗(位置记忆),关闭销毁并停止采样。窗口由 App 层持有。</summary>
     private void SetStatsOverlay(bool on)
@@ -734,6 +872,18 @@ public class SettingsPanel : UserControl
         if (_syncingOverlayToggle) return;
         AppServices.Config.ShowStatsOverlay = on;
         Save();
+        if (on)
+        {
+            PresentMonProvisioner.EnsureOnce();
+            // 组件可能在后台刚下载完:稍后再刷新一次状态
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                RefreshFpsStatus();
+            };
+            timer.Start();
+        }
         App.ApplyStatsOverlay(on);
     }
 
