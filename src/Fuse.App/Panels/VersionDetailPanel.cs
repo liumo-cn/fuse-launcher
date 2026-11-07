@@ -1863,13 +1863,12 @@ public class VersionDetailPanel : UserControl
         {
             Style = (Style)Application.Current.Resources["DarkInput"],
             FontSize = 11,
-            Height = 32,
             IsReadOnly = true,
             Margin = new Thickness(0, 6, 0, 0),
-            VerticalContentAlignment = VerticalAlignment.Center,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
         };
+        // 固定 Height + VerticalContentAlignment 会让 TextBoxView 画到裁剪区外(框有值但屏幕空白)
         System.Windows.Automation.AutomationProperties.SetName(_mpInviteText, "房间邀请链接");
         _mpInvitePanel.Children.Add(_mpInviteText);
         _mpCopyButton = new Button
@@ -2328,7 +2327,11 @@ public class VersionDetailPanel : UserControl
             _mpBadge.Visibility = Visibility.Visible;
             if (_mpInvitePanel != null)
                 _mpInvitePanel.Visibility = string.IsNullOrEmpty(state.InviteLink) ? Visibility.Collapsed : Visibility.Visible;
-            if (_mpInviteText != null) _mpInviteText.Text = state.InviteLink ?? "";
+            if (_mpInviteText != null)
+            {
+                _mpInviteText.Text = state.InviteLink ?? "";
+                _mpInviteText.ScrollToHome();
+            }
             if (_mpCopyButton != null) _mpCopyButton.IsEnabled = state.InviteLink != null;
             if (_mpToggleButton != null)
             {
