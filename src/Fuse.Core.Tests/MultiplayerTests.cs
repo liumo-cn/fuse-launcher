@@ -260,6 +260,38 @@ public class LanPortWatcherTests
         var watcher = new LanPortWatcher(log);
         Assert.Null(watcher.TryScanOnce().Port);
     }
+
+    [Fact]
+    public void SkipsE4mcBrokerHandshakeLines()
+    {
+        // broker/relaymap 行也带 *.e4mc.link,但那是调度服务器;房间地址在 Domain assigned 行
+        var dir = Path.Combine(Path.GetTempPath(), "fuse-mp-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var log = Path.Combine(dir, "latest.log");
+        File.WriteAllText(log,
+            "[Render thread/INFO]: Published LAN server on port 55936\n" +
+            "[e4mc_minecraft-init/INFO]: broker req: https://broker.e4mc.link/getBestRelay GET\n" +
+            "[e4mc_minecraft-init/INFO]: broker resp: (GET https://broker.e4mc.link/getBestRelay) 200\n" +
+            "[Netty NIO IO #2/INFO]: relaymap req: https://natives.e4mc.link/relaymap.json GET\n" +
+            "[Netty NIO IO #2/INFO]: Domain assigned: steersman-makeshift.jp.e4mc.link\n");
+        var watcher = new LanPortWatcher(log);
+        var result = watcher.TryScanOnce();
+        Assert.Equal("steersman-makeshift.jp.e4mc.link", result.ModAddress);
+    }
+
+    [Fact]
+    public void ReturnsNullWhenOnlyBrokerLinesExist()
+    {
+        // 握手进行中:还不能下结论,继续等真正的房间域名
+        var dir = Path.Combine(Path.GetTempPath(), "fuse-mp-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var log = Path.Combine(dir, "latest.log");
+        File.WriteAllText(log,
+            "[e4mc_minecraft-init/INFO]: broker req: https://broker.e4mc.link/getBestRelay GET\n" +
+            "[e4mc_minecraft-init/INFO]: broker resp: (GET https://broker.e4mc.link/getBestRelay) 200\n");
+        var watcher = new LanPortWatcher(log);
+        Assert.Null(watcher.TryScanOnce().ModAddress);
+    }
 }
 
 public class TunnelRunnerTests

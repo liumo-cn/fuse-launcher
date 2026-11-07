@@ -27,11 +27,11 @@ public sealed class LanPortWatcher : IDisposable
         new("\\[CHAT\\] .*?(?:端口|port)[:：]\\s*(\\d{2,5})", RegexOptions.Compiled | RegexOptions.IgnoreCase),
     };
 
-    /// <summary>联机 mod 会往聊天/日志里打公网地址,按域名/地址特征抓。</summary>
+    /// <summary>联机 mod 会往聊天/日志里打公网地址,按域名/地址特征抓。子域允许多级(e4mc 中转: xxx.jp.e4mc.link)。</summary>
     private static readonly Regex[] ModAddressPatterns =
     {
-        new("\\b([a-z0-9\\-]+\\.e4mc\\.link)\\b", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-        new("\\b([a-z0-9\\-]+\\.playit\\.gg)\\b", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new("\\b([a-z0-9\\-]+(?:\\.[a-z0-9\\-]+)*\\.e4mc\\.link)\\b", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new("\\b([a-z0-9\\-]+(?:\\.[a-z0-9\\-]+)*\\.playit\\.gg)\\b", RegexOptions.Compiled | RegexOptions.IgnoreCase),
         new("\\b((?:\\d{1,3}\\.){3}\\d{1,3}:\\d{2,5})\\b", RegexOptions.Compiled),
         new("\\b(\\[[0-9a-fA-F:]+\\]:\\d{2,5})\\b", RegexOptions.Compiled),
     };
@@ -82,21 +82,31 @@ public sealed class LanPortWatcher : IDisposable
         }
 
         string? modAddress = null;
-        foreach (var regex in ModAddressPatterns)
+        foreach (var line in content.Split('\n'))
         {
-            var m = regex.Match(content);
-            if (!m.Success) continue;
-            var candidate = m.Groups[1].Value;
-            // 局域网监听行也会被"IP:端口"模式命中(0.0.0.0:51234),这不是公网地址,排除内网/回环
-            var colon = candidate.LastIndexOf(':');
-            var hostPart = candidate.StartsWith("[")
-                ? candidate.Substring(1, Math.Max(colon, 1) - 2)
-                : candidate.Substring(0, colon > 0 ? colon : candidate.Length);
-            if (System.Net.IPAddress.TryParse(hostPart.Trim('[', ']'), out var ip) &&
-                (System.Net.IPAddress.IsLoopback(ip) || IsPrivateIp(ip)))
+            // e4mc 的握手/调度行里也有 *.e4mc.link 域名,但那是 broker 不是房间地址
+            // (房间地址在 "Domain assigned:" 与聊天行的"托管在域名[xxx]上")
+            if (line.IndexOf("broker", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                line.IndexOf("relaymap", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                line.IndexOf("natives.e4mc", StringComparison.OrdinalIgnoreCase) >= 0)
                 continue;
-            modAddress = candidate;
-            break;
+            foreach (var regex in ModAddressPatterns)
+            {
+                var m = regex.Match(line);
+                if (!m.Success) continue;
+                var candidate = m.Groups[1].Value;
+                // 局域网监听行也会被"IP:端口"模式命中(0.0.0.0:51234),这不是公网地址,排除内网/回环
+                var colon = candidate.LastIndexOf(':');
+                var hostPart = candidate.StartsWith("[")
+                    ? candidate.Substring(1, Math.Max(colon, 1) - 2)
+                    : candidate.Substring(0, colon > 0 ? colon : candidate.Length);
+                if (System.Net.IPAddress.TryParse(hostPart.Trim('[', ']'), out var ip) &&
+                    (System.Net.IPAddress.IsLoopback(ip) || IsPrivateIp(ip)))
+                    continue;
+                modAddress = candidate;
+                break;
+            }
+            if (modAddress != null) break;
         }
         return new LanScanResult(port, modAddress);
     }
