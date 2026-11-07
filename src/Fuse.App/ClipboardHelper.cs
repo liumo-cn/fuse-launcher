@@ -1,35 +1,59 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Windows;
 
 namespace Fuse.App;
 
 /// <summary>
-/// 剪贴板被别的进程短暂占用时 OpenClipboard 会抛 CLIPBRD_E_CANT_OPEN(0x800401D0),
-/// WPF 的 Clipboard.SetText 没有重试,游戏开着的时候很容易撞上,这里带退避重试。
+/// 写文本剪贴板:绕开 WPF 的 OLE 路径(SetDataObject 在游戏开着时实测持续抛
+/// CLIPBRD_E_CANT_OPEN,外部进程却开得了剪贴板),直接走 user32,带重试。
+/// 失败由调用方给提示,不再抛未处理异常。
 /// </summary>
 internal static class ClipboardHelper
 {
-    /// <summary>尝试写入文本剪贴板,失败返回 false(调用方给提示,不再炸未处理异常)。</summary>
-    public static bool TrySetText(string text, int attempts = 10)
+    private const uint CF_UNICODETEXT = 13;
+    private const uint GMEM_MOVEABLE = 0x0002;
+
+    [DllImport("user32.dll")] private static extern bool OpenClipboard(IntPtr hWndNewOwner);
+    [DllImport("user32.dll")] private static extern bool EmptyClipboard();
+    [DllImport("user32.dll")] private static extern bool CloseClipboard();
+    [DllImport("user32.dll")] private static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+    [DllImport("kernel32.dll")] private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+    [DllImport("kernel32.dll")] private static extern IntPtr GlobalLock(IntPtr hMem);
+    [DllImport("kernel32.dll")] private static extern bool GlobalUnlock(IntPtr hMem);
+    [DllImport("kernel32.dll")] private static extern IntPtr GlobalFree(IntPtr hMem);
+
+    /// <summary>尝试写入,全部重试失败返回 false。最多 blocking 约 0.5 秒,不长时间卡 UI。</summary>
+    public static bool TrySetText(string text, int attempts = 8)
     {
         for (var i = 0; i < attempts; i++)
         {
-            try
-            {
-                Clipboard.SetDataObject(text, true);
-                return true;
-            }
-            catch (COMException ex) when ((uint)ex.HResult == 0x800401D0u)
-            {
-                Thread.Sleep(80);
-            }
-            catch (ExternalException)
-            {
-                Thread.Sleep(80);
-            }
+            if (Win32SetText(text)) return true;
+            Thread.Sleep(60);
         }
         return false;
+    }
+
+    private static bool Win32SetText(string text)
+    {
+        if (!OpenClipboard(IntPtr.Zero)) return false;
+        try
+        {
+            if (!EmptyClipboard()) return false;
+            var chars = text.ToCharArray();
+            var h = GlobalAlloc(GMEM_MOVEABLE, (UIntPtr)((chars.Length + 1) * 2));
+            if (h == IntPtr.Zero) return false;
+            var ptr = GlobalLock(h);
+            if (ptr == IntPtr.Zero) { GlobalFree(h); return false; }
+            Marshal.Copy(chars, 0, ptr, chars.Length);
+            Marshal.WriteInt16(ptr, chars.Length * 2, 0);
+            GlobalUnlock(h);
+            // 成功后内存归系统所有,不再 GlobalFree
+            return SetClipboardData(CF_UNICODETEXT, h) != IntPtr.Zero;
+        }
+        finally
+        {
+            CloseClipboard();
+        }
     }
 }
