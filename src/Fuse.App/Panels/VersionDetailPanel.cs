@@ -2063,17 +2063,6 @@ public class VersionDetailPanel : UserControl
         System.Windows.Automation.AutomationProperties.SetName(e4mc, "安装 e4mc");
         e4mc.Click += (_, _) => InstallMultiplayerMod(new[] { "e4mc" }, "e4mc");
         modRow.Children.Add(e4mc);
-        var lan = new Button
-        {
-            Content = "安装简单联机",
-            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
-            Height = 44,
-            Padding = new Thickness(14, 0, 14, 0),
-            Margin = new Thickness(0, 0, 8, 0),
-        };
-        System.Windows.Automation.AutomationProperties.SetName(lan, "安装简单联机");
-        lan.Click += (_, _) => InstallMultiplayerMod(new[] { "lan-server-properties", "custom-lan" }, "简单联机");
-        modRow.Children.Add(lan);
         var offline = new Button
         {
             Content = "安装离线局域网",
@@ -2084,8 +2073,11 @@ public class VersionDetailPanel : UserControl
         System.Windows.Automation.AutomationProperties.SetName(offline, "安装离线局域网");
         offline.Click += (_, _) =>
         {
-            InstallMultiplayerMod(new[] { "offlinelan" }, "离线局域网");
-            Toast("装好后重启游戏，对局域网开放时把在线模式关掉", _multiplayerCard);
+            // 按版本自动挑组件 26.3 用 offlinelan 老版本用 mcwifipnp / lan-properties
+            InstallMultiplayerMod(
+                new[] { "offlinelan", "mcwifipnp", "lan-properties", "custom-lan", "lan-server-properties" },
+                "离线局域网");
+            Toast("装好后重启游戏，对局域网开放时把正版验证关掉", _multiplayerCard);
         };
         modRow.Children.Add(offline);
         options.Children.Add(modRow);
