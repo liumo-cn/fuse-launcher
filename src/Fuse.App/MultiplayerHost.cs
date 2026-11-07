@@ -242,7 +242,7 @@ internal sealed class MultiplayerHostSession : IDisposable
         if (v6.Count > 0)
         {
             _address = "[" + v6[0] + "]:" + port;
-            Publish("Ready", "IPv6 直连(需好友网络也支持 IPv6):" + _address, "IPv6");
+            Publish("Ready", "IPv6 直连(双方都要有 IPv6，手机热点常拦入站，连不上就用联机 Mod):" + _address, "IPv6");
             EnsureFirewallAsync(ct);
             return;
         }

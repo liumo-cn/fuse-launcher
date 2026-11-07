@@ -208,6 +208,7 @@ internal sealed class MultiplayerJoinWindow : Window
     private async Task JoinViaP2p()
     {
         if (_guest == null || _selected == null) return;
+        if (!EnsureOfflineName()) return;
         if (_p2pJoinButton != null) _p2pJoinButton.IsEnabled = false;
         if (_p2pStatus != null) _p2pStatus.Text = "等待直连建立…(房主粘贴回执后自动连通)";
         var port = await _guest.WaitForReadyAsync(30000).ConfigureAwait(true);
@@ -391,19 +392,108 @@ internal sealed class MultiplayerJoinWindow : Window
             hint.ShowDialog();
             return;
         }
+        if (!EnsureOfflineName()) return;
 
         SaveServerEntry(_selected, _invite.Address);
         StartLaunch(_selected, _invite.Address);
     }
 
+    /// <summary>
+    /// 离线账号默认名是 Player 所有人 UUID 一样 同房间会互相顶下线
+    /// 加入前让用户改成自己的名字
+    /// </summary>
+    private bool EnsureOfflineName()
+    {
+        if (!string.Equals(AppServices.Accounts.Data.ActiveType, "offline", StringComparison.OrdinalIgnoreCase))
+            return true;
+        var current = AppServices.Accounts.Data.OfflinePlayerName;
+        if (!string.IsNullOrWhiteSpace(current) &&
+            !string.Equals(current, "Player", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return PromptOfflineName(string.Equals(current, "Player", StringComparison.OrdinalIgnoreCase) ? "" : current ?? "");
+    }
+
+    private bool PromptOfflineName(string initial)
+    {
+        var stack = new StackPanel();
+        var head = DialogKit.Title("先起个名字");
+        stack.Children.Add(head);
+        stack.Children.Add(DialogKit.Hint("好友会看到这个名字 同名的人进同一个房间会互相顶下线"));
+        var box = DialogKit.Input(initial);
+        box.FontSize = 12;
+        box.Padding = new Thickness(12, 3, 12, 3);
+        System.Windows.Automation.AutomationProperties.SetName(box, "联机用户名");
+        stack.Children.Add(box);
+        var tip = DialogKit.Hint("3-16 个字母 数字 或下划线");
+        stack.Children.Add(tip);
+
+        var accepted = false;
+        Window? window = null;
+        Action accept = () =>
+        {
+            var name = box.Text.Trim();
+            if (!IsValidPlayerName(name) ||
+                string.Equals(name, "Player", StringComparison.OrdinalIgnoreCase))
+            {
+                tip.Text = "换一个吧 3-16 个字母 数字 或下划线 不能叫 Player";
+                return;
+            }
+            AppServices.Accounts.UseOffline(name);
+            accepted = true;
+            window!.DialogResult = true;
+        };
+        window = new Window
+        {
+            Width = 380,
+            Content = DialogKit.Card(stack),
+        };
+        DialogKit.ApplyWindow(window, 380);
+        stack.Children.Add(DialogKit.Buttons(
+            DialogKit.Primary("就用这个", accept),
+            DialogKit.Secondary("取消", () => window!.DialogResult = false)));
+        window.Owner = this;
+        window.Loaded += (_, _) => box.Focus();
+        DialogKit.WireDrag(window, head);
+        DialogKit.WireKeys(window, accept);
+        window.ShowDialog();
+        return accepted;
+    }
+
+    private static bool IsValidPlayerName(string name)
+    {
+        if (name.Length < 3 || name.Length > 16) return false;
+        foreach (var c in name)
+        {
+            var ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') || c == '_';
+            if (!ok) return false;
+        }
+        return true;
+    }
+
     private void StartLaunch(InstalledVersionInfo version, string connectAddress)
     {
         var versionId = version.Id;
+        if (IsGameRunning(versionId))
+        {
+            new InfoWindow("游戏已经在运行",
+                "这个版本已经开着 先关掉游戏再点加入\n\n或者回到游戏里用 多人游戏 → 直接连接 输入：\n" + connectAddress)
+            { Owner = this }.ShowDialog();
+            return;
+        }
         var confirm = new ConfirmWindow("加入房间",
             "启动 " + versionId + " 并连接到 " + connectAddress + "？", "启动游戏")
         { Owner = AppServices.Widget };
         if (confirm.ShowDialog() != true) return;
         DialogResult = true;
         _ = AppLauncher.LaunchAsync(versionId, _ => { }, connectAddress);
+    }
+
+    /// <summary>启动器重启后内存态会丢 这里同时查运行表和进程标记</summary>
+    private static bool IsGameRunning(string versionId)
+    {
+        if (LaunchState.GetRunning(versionId) != null) return true;
+        using var found = RunningGameFinder.FindByMarker(versionId);
+        return found != null;
     }
 }
