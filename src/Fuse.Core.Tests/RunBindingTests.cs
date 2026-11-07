@@ -35,24 +35,10 @@ public class RunBindingTests
                 if (mode == "OneWay") binding.Mode = BindingMode.OneWay;
                 run.SetBinding(Run.TextProperty, binding);
 
-                var textBlock = new TextBlock();
-                textBlock.Inlines.Add(run);
-
-                // 挂到已加载的可视树强制绑定激活（与 DataTemplate 实例化同路径）
-                var window = new Window
-                {
-                    Content = textBlock,
-                    Width = 10,
-                    Height = 10,
-                    WindowStyle = WindowStyle.None,
-                    ShowInTaskbar = false,
-                    ShowActivated = false,
-                    Left = -200,
-                    Top = -200,
-                };
-                window.Show();
+                // 不建窗口 直接激活绑定 避免 CI 无桌面会话时 Show 挂住
+                var expression = run.GetBindingExpression(Run.TextProperty);
+                expression!.UpdateTarget();
                 value = run.Text;
-                window.Close();
             }
             catch (Exception ex)
             {
@@ -61,7 +47,7 @@ public class RunBindingTests
         });
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        thread.Join(10000);
+        if (!thread.Join(5000)) throw new TimeoutException("binding test timed out");
 
         if (shouldSucceed)
         {
