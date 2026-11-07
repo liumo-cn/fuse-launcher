@@ -305,6 +305,23 @@ public class LanPortWatcherTests
     }
 
     [Fact]
+    public void WaitForModAddressReturnsExistingDomain()
+    {
+        // 开放后 broker 握手行不该命中,但 Domain assigned 行在:立即返回
+        var dir = Path.Combine(Path.GetTempPath(), "fuse-mp-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var log = Path.Combine(dir, "latest.log");
+        File.WriteAllText(log,
+            "[Render thread/INFO]: Published LAN server on port 50000\n" +
+            "[e4mc]: broker req: https://broker.e4mc.link/getBestRelay GET\n" +
+            "[Netty NIO IO #2/INFO]: Domain assigned: patient-otter.jp.e4mc.link\n");
+        var watcher = new LanPortWatcher(log, pollMs: 40);
+        var result = watcher.WaitForModAddressAsync(2000).GetAwaiter().GetResult();
+        Assert.Equal("patient-otter.jp.e4mc.link", result.ModAddress);
+        watcher.Dispose();
+    }
+
+    [Fact]
     public void ReturnsNullWhenOnlyBrokerLinesExist()
     {
         // 握手进行中:还不能下结论,继续等真正的房间域名

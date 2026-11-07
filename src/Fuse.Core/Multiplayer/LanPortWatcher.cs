@@ -73,6 +73,19 @@ public sealed class LanPortWatcher : IDisposable
         return true;
     }
 
+    /// <summary>等联机 Mod 的公网域名出现(开放局域网后 broker 握手要几秒才分配)。</summary>
+    public async Task<LanScanResult> WaitForModAddressAsync(int timeoutMs, CancellationToken ct = default)
+    {
+        var deadline = UtcNowMs() + timeoutMs;
+        while (UtcNowMs() < deadline && !ct.IsCancellationRequested)
+        {
+            var r = Scan(ReadTail());
+            if (r.ModAddress != null) return r;
+            await Task.Delay(_pollMs, ct).ConfigureAwait(false);
+        }
+        return Scan(ReadTail());
+    }
+
     /// <summary>不等待,立刻扫一次当前日志。</summary>
     public LanScanResult TryScanOnce() => Scan(ReadTail());
 

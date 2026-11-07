@@ -123,7 +123,20 @@ internal sealed class MultiplayerHostSession : IDisposable
         {
             _lanPort = scan.Port;
             Boot("[multiplayer] lan port " + scan.Port.Value.Port);
-            ProbeChannels(_cts.Token);
+            // 端口行先于 e4mc 域名出现:装了联机 Mod 就等域名落地,否则会误走直连
+            if (HasE4mcMod(instance))
+            {
+                Publish("Probing", "已捕获 LAN 端口,等待联机 Mod 分配隧道地址…");
+                var later = _watcher.WaitForModAddressAsync(30_000, _cts.Token).GetAwaiter().GetResult();
+                if (_closed || ct.IsCancellationRequested) return;
+                if (later.ModAddress != null)
+                {
+                    _modAddress = later.ModAddress;
+                    _address = later.ModAddress;
+                    Publish("Ready", "联机 Mod 已开放:" + later.ModAddress, "mod");
+                }
+            }
+            if (Current.Phase != "Ready") ProbeChannels(_cts.Token);
         }
         else
         {
@@ -176,6 +189,24 @@ internal sealed class MultiplayerHostSession : IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>实例 mods 目录里有没有 e4mc(被停用的不算)。</summary>
+    private static bool HasE4mcMod(string instance)
+    {
+        try
+        {
+            var mods = Path.Combine(instance, "mods");
+            if (!Directory.Exists(mods)) return false;
+            foreach (var f in Directory.EnumerateFiles(mods, "*.jar"))
+            {
+                if (Path.GetFileName(f).IndexOf("e4mc", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+        }
+        catch (Exception)
+        {
+        }
+        return false;
     }
 
     /// <summary>通道探测:UPnP → IPv6 → 仅局域网。</summary>
