@@ -70,11 +70,37 @@ public sealed class ChunkedDownloader(HttpClient http)
 
         var partPath = destPath + ".part";
         var statePath = destPath + ".chunks.json";
+        var sourceOffset = 0;
+        for (var round = 0; ; round++)
+        {
+            try
+            {
+                return await DownloadOnceAsync(url, destPath, partPath, statePath,
+                    expectedSha1, opts, progress, cancellation, sourceOffset).ConfigureAwait(false);
+            }
+            catch (HashMismatchException)
+            {
+                // 校验失败说明这份数据不能用:先清断点,否则下次会认为所有块都完成了
+                TryDeleteFile(statePath);
+                TryDeleteFile(partPath);
+                if (round > 0 || !HasAlternativeSource(url, sourceOffset)) throw;
+                // 分块没有独立哈希定位不到坏块 换下一个源整份重下
+                sourceOffset++;
+                progress?.Report(0);
+            }
+        }
+    }
 
-        var (total, supportsRange) = await ProbeAsync(url, cancellation).ConfigureAwait(false);
+    /// <summary>一轮完整下载;哈希不匹配时抛 <see cref="HashMismatchException"/>,由外层换源重来。</summary>
+    private async Task<ChunkedDownloadResult> DownloadOnceAsync(
+        string url, string destPath, string partPath, string statePath,
+        string? expectedSha1, ChunkedDownloadOptions opts,
+        IProgress<double>? progress, CancellationToken cancellation, int sourceOffset)
+    {
+        var (total, supportsRange) = await ProbeAsync(url, cancellation, sourceOffset).ConfigureAwait(false);
         if (!supportsRange)
         {
-            await DownloadSingleStreamAsync(url, partPath, progress, cancellation).ConfigureAwait(false);
+            await DownloadSingleStreamAsync(url, partPath, progress, cancellation, sourceOffset).ConfigureAwait(false);
             await VerifyOrThrowAsync(partPath, expectedSha1, opts.Algo, cancellation).ConfigureAwait(false);
             ReplaceFile(partPath, destPath);
             return new ChunkedDownloadResult { DestPath = destPath, TotalBytes = total, HashVerified = true };
@@ -116,8 +142,8 @@ public sealed class ChunkedDownloader(HttpClient http)
                 await gate.WaitAsync(cancellation).ConfigureAwait(false);
                 try
                 {
-                    await DownloadChunkAsync(http, url, partPath, item.Chunk, opts.MaxRetriesPerChunk, cancellation)
-                        .ConfigureAwait(false);
+                    await DownloadChunkAsync(http, url, partPath, item.Chunk, opts.MaxRetriesPerChunk,
+                        sourceOffset, cancellation).ConfigureAwait(false);
                     lock (stateLock)
                     {
                         state.Completed.Add(item.Index);
@@ -142,7 +168,7 @@ public sealed class ChunkedDownloader(HttpClient http)
                 // 镜像的全量 GET 反而更快(17.5MB / 6s),这条兜底比死磕 Range 可靠。
                 TryDeleteFile(statePath);
                 TryDeleteFile(partPath);
-                await DownloadSingleStreamAsync(url, partPath, progress, cancellation).ConfigureAwait(false);
+                await DownloadSingleStreamAsync(url, partPath, progress, cancellation, sourceOffset + 1).ConfigureAwait(false);
                 await VerifyOrThrowAsync(partPath, expectedSha1, opts.Algo, cancellation).ConfigureAwait(false);
                 ReplaceFile(partPath, destPath);
                 return new ChunkedDownloadResult
@@ -168,11 +194,19 @@ public sealed class ChunkedDownloader(HttpClient http)
         };
     }
 
+    /// <summary>当前 attempt 和下一个 attempt 是否指向不同地址(普通 URL 没有备用源)。</summary>
+    private static bool HasAlternativeSource(string url, int sourceOffset)
+    {
+        var current = UrlMirror.ForAttempt(url, sourceOffset);
+        var next = UrlMirror.ForAttempt(url, sourceOffset + 1);
+        return !string.Equals(current, next, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// 探测文件大小与 Range 支持。**必须带重试**:镜像限流(429)时这里是最先撞上的地方,
     /// 裸请求会让整个大文件下载在第一步就失败(用户看到的"原版也下不了"就是这条)。
     /// </summary>
-    private async Task<(long Total, bool SupportsRange)> ProbeAsync(string url, CancellationToken ct)
+    private async Task<(long Total, bool SupportsRange)> ProbeAsync(string url, CancellationToken ct, int sourceOffset)
     {
         Exception? last = null;
         for (var attempt = 0; attempt <= 3; attempt++)
@@ -180,7 +214,7 @@ public sealed class ChunkedDownloader(HttpClient http)
             if (attempt > 0) await Task.Delay(Math.Min(1500 * attempt, 8000), ct).ConfigureAwait(false);
             try
             {
-                var attemptUrl = UrlMirror.ForAttempt(url, attempt);
+                var attemptUrl = UrlMirror.ForAttempt(url, sourceOffset + attempt);
                 using var request = new HttpRequestMessage(HttpMethod.Get, attemptUrl);
                 request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
                 using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct)
@@ -199,7 +233,7 @@ public sealed class ChunkedDownloader(HttpClient http)
                     // 继续读会被当成“文件大小 1 字节”);但 attempt 本身会换源
                     // (官方↔镜像 / BMCL↔USTC↔QLU),所以只要下一个 attempt 指向别的地址就继续。
                     last = new IOException($"服务器返回 HTTP {status}（{response.ReasonPhrase}）");
-                    var nextUrl = attempt < 3 ? UrlMirror.ForAttempt(url, attempt + 1) : null;
+                    var nextUrl = attempt < 3 ? UrlMirror.ForAttempt(url, sourceOffset + attempt + 1) : null;
                     if (nextUrl != null && !string.Equals(nextUrl, attemptUrl, StringComparison.OrdinalIgnoreCase))
                         continue;
                     break;
@@ -235,7 +269,8 @@ public sealed class ChunkedDownloader(HttpClient http)
     }
 
     private static async Task DownloadChunkAsync(
-        HttpClient http, string url, string partPath, ByteRange chunk, int maxRetries, CancellationToken ct)
+        HttpClient http, string url, string partPath, ByteRange chunk, int maxRetries,
+        int sourceOffset, CancellationToken ct)
     {
         Exception? last = null;
         for (var attempt = 0; attempt <= maxRetries; attempt++)
@@ -254,7 +289,7 @@ public sealed class ChunkedDownloader(HttpClient http)
                 var chunkToken = chunkCts.Token;
 
                 // Balanced:首次官方,失败后转镜像(熔断期内恒官方)
-                var attemptUrl = UrlMirror.ForAttempt(url, attempt);
+                var attemptUrl = UrlMirror.ForAttempt(url, sourceOffset + attempt);
                 using var request = new HttpRequestMessage(HttpMethod.Get, attemptUrl);
                 request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(
                     chunk.Offset, chunk.Offset + chunk.Length - 1);
@@ -296,9 +331,9 @@ public sealed class ChunkedDownloader(HttpClient http)
     }
 
     private async Task DownloadSingleStreamAsync(
-        string url, string partPath, IProgress<double>? progress, CancellationToken ct)
+        string url, string partPath, IProgress<double>? progress, CancellationToken ct, int sourceOffset)
     {
-        using var response = await http.GetAsync(UrlMirror.ForAttempt(url, 1), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        using var response = await http.GetAsync(UrlMirror.ForAttempt(url, sourceOffset), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var total = response.Content.Headers.ContentLength ?? -1;
         using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -371,6 +406,14 @@ public sealed class ChunkedDownloader(HttpClient http)
     {
         if (string.IsNullOrEmpty(expectedSha1)) return;
         if (!await Hashing.VerifyFileAsync(path, expectedSha1, algo, ct).ConfigureAwait(false))
-            throw new IOException("校验不通过：文件可能损坏或被篡改（" + algo + " 不匹配）");
+            throw new HashMismatchException("校验不通过：文件可能损坏或被篡改（" + algo + " 不匹配）");
+    }
+
+    /// <summary>整文件哈希不匹配。数据不能用,但换源重下可能成功。</summary>
+    private sealed class HashMismatchException : IOException
+    {
+        public HashMismatchException(string message) : base(message)
+        {
+        }
     }
 }

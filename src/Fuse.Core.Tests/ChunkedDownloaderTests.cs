@@ -105,9 +105,57 @@ public class ChunkedDownloaderTests : IDisposable
         var dest = Path.Combine(_dir, "bad.jar");
 
         var downloader = new ChunkedDownloader(new HttpClient());
-        await Assert.ThrowsAsync<IOException>(() =>
+        await Assert.ThrowsAnyAsync<IOException>(() =>
             downloader.DownloadAsync(_cdn.Url, dest, new string('0', 40),
                 new ChunkedDownloadOptions { Parallelism = 2, ChunkBytes = 50_000 }));
+
+        // 校验失败必须清断点 否则下次会认为所有块都完成 反复校验同一个坏文件
+        Assert.False(File.Exists(dest));
+        Assert.False(File.Exists(dest + ".part"));
+        Assert.False(File.Exists(dest + ".chunks.json"));
+    }
+
+    /// <summary>坏源下完哈希不对:清断点后换下一个源整份重下,最终拿到正确文件。</summary>
+    [Fact]
+    public async Task HashMismatch_RetriesWithAnotherSource()
+    {
+        var payload = Payload(300_000);
+        var sha = Sha1(payload);
+        var dest = Path.Combine(_dir, "retry.jar");
+        var handler = new FirstSourceCorruptHandler(payload);
+
+        var downloader = new ChunkedDownloader(new HttpClient(handler));
+        // libraries.minecraft.net 在 Balanced 下 attempt0=官方、attempt1=USTC 镜像
+        var result = await downloader.DownloadAsync(
+            "https://libraries.minecraft.net/com/example/fuse-retry.jar",
+            dest, sha,
+            new ChunkedDownloadOptions { Parallelism = 2, ChunkBytes = 100_000 });
+
+        Assert.True(result.HashVerified);
+        Assert.Equal(sha, Sha1(await File.ReadAllBytesAsync(dest)));
+        Assert.True(handler.OfficialHits > 0, "应先请求坏源");
+        Assert.True(handler.MirrorHits > 0, "换源后应请求好源");
+    }
+
+    /// <summary>两个源都返回坏字节:重试一轮后必须停下并清断点,不能死循环。</summary>
+    [Fact]
+    public async Task HashMismatch_BothSourcesBad_ThrowsAndCleans()
+    {
+        var payload = Payload(200_000);
+        var dest = Path.Combine(_dir, "bad-both.jar");
+        var handler = new FirstSourceCorruptHandler(payload, corruptAll: true);
+
+        var downloader = new ChunkedDownloader(new HttpClient(handler));
+        await Assert.ThrowsAnyAsync<IOException>(() =>
+            downloader.DownloadAsync(
+                "https://libraries.minecraft.net/com/example/fuse-bad.jar",
+                dest, Sha1(payload),
+                new ChunkedDownloadOptions { Parallelism = 2, ChunkBytes = 100_000 }));
+
+        Assert.True(handler.OfficialHits > 0);
+        Assert.True(handler.MirrorHits > 0);
+        Assert.False(File.Exists(dest + ".part"));
+        Assert.False(File.Exists(dest + ".chunks.json"));
     }
 
     /// <summary>
@@ -183,6 +231,55 @@ public class ChunkedDownloaderTests : IDisposable
             response.Content.Headers.ContentRange =
                 new System.Net.Http.Headers.ContentRangeHeaderValue(start, start + count - 1, _payload.Length);
             return Task.FromResult(response);
+        }
+    }
+
+    /// <summary>官方域返回坏字节,镜像域返回正确字节;用于验证哈希失败后的换源重下。</summary>
+    private sealed class FirstSourceCorruptHandler : HttpMessageHandler
+    {
+        private readonly byte[] _payload;
+        private readonly bool _corruptAll;
+        public int OfficialHits;
+        public int MirrorHits;
+
+        public FirstSourceCorruptHandler(byte[] payload, bool corruptAll = false)
+        {
+            _payload = payload;
+            _corruptAll = corruptAll;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var official = request.RequestUri!.Host.Equals("libraries.minecraft.net", StringComparison.OrdinalIgnoreCase);
+            if (official) Interlocked.Increment(ref OfficialHits);
+            else Interlocked.Increment(ref MirrorHits);
+            var corrupt = _corruptAll || official;
+
+            var range = request.Headers.Range?.Ranges.FirstOrDefault();
+            var start = range?.From ?? 0;
+            var end = range?.To ?? _payload.Length - 1;
+            if (start < 0 || end < start || start >= _payload.Length) end = _payload.Length - 1;
+            var count = (int)Math.Min(end - start + 1, _payload.Length - start);
+            var body = new byte[count];
+            Array.Copy(_payload, start, body, 0, count);
+            if (corrupt && body.Length > 0) body[0] ^= 0xFF;
+
+            if (range != null)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.PartialContent)
+                {
+                    Content = new ByteArrayContent(body),
+                };
+                response.Content.Headers.ContentRange =
+                    new System.Net.Http.Headers.ContentRangeHeaderValue(start, start + count - 1, _payload.Length);
+                return Task.FromResult(response);
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(body),
+            });
         }
     }
 
