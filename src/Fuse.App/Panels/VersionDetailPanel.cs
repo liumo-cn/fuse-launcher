@@ -2411,7 +2411,8 @@ public class VersionDetailPanel : UserControl
             return;
         }
 
-        var gameRunning = LaunchState.IsBusy(_versionId);
+        // 先认领启动器重启前就在跑的同一局,认领到就不弹"先启动游戏"
+        var gameRunning = LaunchState.IsBusy(_versionId) || AppLauncher.AdoptRunningGame(_versionId);
         if (!gameRunning)
         {
             var confirm = new ConfirmWindow("创建房间",

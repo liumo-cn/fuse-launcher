@@ -200,6 +200,39 @@ public class LanPortWatcherTests
     }
 
     [Fact]
+    public void CatchesModernPublishedLanLine()
+    {
+        // 1.20.2+/26.x 的措辞,此前缺失导致端口永远抓不到
+        var dir = Path.Combine(Path.GetTempPath(), "fuse-mp-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var log = Path.Combine(dir, "latest.log");
+        File.WriteAllText(log,
+            "[19:08:54] [Render thread/INFO]: Published LAN server on port 62776\n");
+        var watcher = new LanPortWatcher(log);
+        var result = watcher.TryScanOnce();
+        Assert.NotNull(result.Port);
+        Assert.Equal(62776, result.Port!.Value.Port);
+        Assert.Equal("127.0.0.1", result.Port!.Value.Host);
+    }
+
+    [Fact]
+    public void CatchesLanLineWrittenBeforeWatchingStarted()
+    {
+        // 用户先在游戏里点开放、后点创建房间:监听启动时事件已经在日志尾部
+        var dir = Path.Combine(Path.GetTempPath(), "fuse-mp-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var log = Path.Combine(dir, "latest.log");
+        var noise = string.Concat(Enumerable.Range(0, 4000)
+            .Select(i => $"[Render thread/INFO]: fill line {i} some longer content to pad the log size\n"));
+        File.WriteAllText(log, noise +
+            "[19:08:54] [Render thread/INFO]: Published LAN server on port 54321\n");
+        var watcher = new LanPortWatcher(log);
+        var result = watcher.TryScanOnce();
+        Assert.NotNull(result.Port);
+        Assert.Equal(54321, result.Port!.Value.Port);
+    }
+
+    [Fact]
     public async Task CatchesE4mcDomainFromChat()
     {
         var dir = Path.Combine(Path.GetTempPath(), "fuse-mp-tests-" + Guid.NewGuid().ToString("N"));

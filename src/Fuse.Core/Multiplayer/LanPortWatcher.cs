@@ -19,6 +19,8 @@ public sealed class LanPortWatcher : IDisposable
 {
     private static readonly Regex[] PortPatterns =
     {
+        // 1.20.2+/26.x 集成服务器开放局域网的新措辞
+        new("Published LAN server on port (\\d+)", RegexOptions.Compiled),
         new("Listening on /0\\.0\\.0\\.0:(\\d+)", RegexOptions.Compiled),
         new("Started serving on /(\\d+\\.\\d+\\.\\d+\\.\\d+):(\\d+)", RegexOptions.Compiled),
         new("Starting to serve .* on port (\\d+)", RegexOptions.Compiled),
@@ -37,6 +39,7 @@ public sealed class LanPortWatcher : IDisposable
     private readonly string _logPath;
     private readonly int _pollMs;
     private long _lastLength;
+    private bool _seeded;
     private string _pendingTail = "";
 
     public LanPortWatcher(string logPath, int pollMs = 800)
@@ -123,6 +126,13 @@ public sealed class LanPortWatcher : IDisposable
         {
             if (!File.Exists(_logPath)) return _pendingTail;
             using var fs = new FileStream(_logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            if (!_seeded)
+            {
+                // 首次直接从尾部 256KB 开始:游戏往往先开了局域网、后点的创建房间,
+                // 从头爬既慢又会错过"已经发生"的开放事件
+                _lastLength = Math.Max(0, fs.Length - 256 * 1024);
+                _seeded = true;
+            }
             if (fs.Length < _lastLength)
             {
                 // 日志被轮转(新一局):重置

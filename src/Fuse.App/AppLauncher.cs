@@ -41,6 +41,14 @@ public static class AppLauncher
         }
 
         Log("begin " + versionId);
+
+        // 启动器重启后内存态丢了:有带标记的同一局还在跑就直接认领,不再拉起第二个游戏
+        if (AdoptRunningGame(versionId))
+        {
+            status("检测到游戏已在运行，直接使用");
+            return LaunchOutcome.Started;
+        }
+
         status("正在启动…");
         var widget = AppServices.Widget;
         widget?.NotifyLaunchStarted();
@@ -153,7 +161,7 @@ public static class AppLauncher
                     ? profile.JavaHomeOverride
                     : AppServices.Config.JavaPolicy == "manual" ? AppServices.Config.JavaHomeOverride : null,
                 MaxHeapMb = heapMb,
-                ExtraJvmArgs = BuildExtraJvmArgs(agentArg, profile.JvmArgs),
+                ExtraJvmArgs = BuildExtraJvmArgs(agentArg, profile.JvmArgs, versionId),
                 // 服务器列表「加入」或档案里的"自动加入":传 host 或 host:port,启动管线走 quickPlay/--server
                 ServerAddress = string.IsNullOrWhiteSpace(effectiveServer) ? null : effectiveServer!.Trim(),
             };
@@ -206,13 +214,32 @@ public static class AppLauncher
         }
     }
 
-    /// <summary>外置登录的 -javaagent 在前;用户自定义 JVM 参数随后(详情页「修改」里填)。</summary>
-    private static IReadOnlyList<string> BuildExtraJvmArgs(string? agentArg, string? userArgs)
+    /// <summary>外置登录的 -javaagent 在前;认领标记随后;用户自定义 JVM 参数最后(详情页「修改」里填)。</summary>
+    private static IReadOnlyList<string> BuildExtraJvmArgs(string? agentArg, string? userArgs, string versionId)
     {
         var list = new List<string>();
         if (!string.IsNullOrEmpty(agentArg)) list.Add(agentArg!);
+        // 认领标记:启动器重启后 RunningGameFinder 靠它把还在跑的游戏认回来
+        list.Add("-Dfuse.version=" + versionId);
         list.AddRange(SplitCommandLine(userArgs));
         return list;
+    }
+
+    /// <summary>扫还在跑的 javaw,带本版本标记就接管进 LaunchState。成功返回 true。</summary>
+    internal static bool AdoptRunningGame(string versionId)
+    {
+        try
+        {
+            var proc = RunningGameFinder.FindByMarker(versionId);
+            if (proc == null) return false;
+            LaunchState.MarkRunning(versionId, proc);
+            Log("adopted " + versionId + " pid=" + proc.Id);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>按空格拆分参数,支持双引号(路径带空格时用 "C:\x y\a.jar")。</summary>
