@@ -23,7 +23,10 @@ public static class ServerListPing
         string host, int port, int timeoutMs = 4000, CancellationToken ct = default)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        using var client = new TcpClient();
+        // IPv6 地址要用 v6 套接字,默认构造是 IPv4 会报"地址族不匹配"
+        using var client = host.IndexOf(':') >= 0
+            ? new TcpClient(System.Net.Sockets.AddressFamily.InterNetworkV6)
+            : new TcpClient();
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeoutMs);
         await client.ConnectAsync(host, port).ConfigureAwait(false);
