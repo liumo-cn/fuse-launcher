@@ -116,6 +116,7 @@ internal sealed class MultiplayerHostSession : IDisposable
         {
             _modAddress = scan.ModAddress;
             _address = scan.ModAddress;
+            _lanPort = scan.Port;   // e4mc 也在桥接本地 LAN 端口,留着做存活检查
             Publish("Ready", "联机 Mod 已开放:" + scan.ModAddress, "mod");
         }
         else if (scan.Port != null)
@@ -132,6 +133,7 @@ internal sealed class MultiplayerHostSession : IDisposable
         }
 
         // 维护到游戏退出(看门狗兜底,这里快速路径再查一遍)
+        var lastLanCheck = UtcNowMs();
         while (!ct.IsCancellationRequested && !_closed && Current.Phase == "Ready")
         {
             if (LaunchState.GetRunning(_versionId) == null)
@@ -141,7 +143,38 @@ internal sealed class MultiplayerHostSession : IDisposable
                 Publish("Closed", "游戏已退出,联机已关闭,UPnP 映射已删除");
                 return;
             }
+            // 世界退回菜单/停止托管后 LAN 端口就没了,但游戏进程和 e4mc 隧道还活着——
+            // 不查的话房主会一直挂着一条死邀请
+            if (_lanPort != null && UtcNowMs() - lastLanCheck > 10_000)
+            {
+                lastLanCheck = UtcNowMs();
+                if (!LanAlive(_lanPort.Value.Port))
+                {
+                    _closed = true;
+                    Cleanup();
+                    Publish("Closed", "世界已退回菜单或已停止托管,房间失效——回到世界再点一次「创建房间」");
+                    return;
+                }
+            }
             Thread.Sleep(3000);
+        }
+    }
+
+    /// <summary>本地 LAN 端口是否还在监听。</summary>
+    private static bool LanAlive(int port)
+    {
+        try
+        {
+            using var c = new System.Net.Sockets.TcpClient();
+            var r = c.BeginConnect("127.0.0.1", port, null, null);
+            if (!r.AsyncWaitHandle.WaitOne(700)) { c.Close(); return false; }
+            c.EndConnect(r);
+            c.Close();
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
