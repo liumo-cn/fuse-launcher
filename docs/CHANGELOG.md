@@ -12,6 +12,7 @@
   避免 BMCL 的 10 次/分钟限流被几千个小文件打爆。
 - 新增 CERNET maven 镜像（库 / Forge / NeoForge / Fabric），
   热点实测比部分现有镜像快，NeoForge metadata 只有它能稳定返回。
+- 联机卡片默认折叠，点标题条展开，不再占详情页顶部。
 
 ## 1.2.3 — 2026-11-07
 

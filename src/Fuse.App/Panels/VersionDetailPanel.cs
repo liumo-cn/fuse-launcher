@@ -1782,8 +1782,9 @@ public class VersionDetailPanel : UserControl
             Margin = new Thickness(0, 0, 0, 8),
         };
         var host = new StackPanel();
+        var body = new StackPanel { Visibility = Visibility.Collapsed };
 
-        // 标题
+        // 标题条点一下展开/收起 默认折叠
         var titleRow = new StackPanel { Orientation = Orientation.Horizontal };
         titleRow.Children.Add(new TextBlock
         {
@@ -1802,8 +1803,41 @@ public class VersionDetailPanel : UserControl
             Margin = new Thickness(8, 1, 0, 0),
             VerticalAlignment = VerticalAlignment.Center,
         });
-        host.Children.Add(titleRow);
-        host.Children.Add(new TextBlock
+        var chevron = new TextBlock
+        {
+            Text = "▸",
+            FontSize = 11,
+            Foreground = T3,
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var titleGrid = new Grid();
+        titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        titleGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        titleGrid.Children.Add(titleRow);
+        Grid.SetColumn(chevron, 1);
+        titleGrid.Children.Add(chevron);
+        var titleButton = new Button
+        {
+            Content = titleGrid,
+            Style = (Style)Application.Current.Resources["FlatRowButton"],
+            Padding = new Thickness(0, 2, 0, 2),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(titleButton, "展开联机");
+        var bodyOpen = false;
+        Action toggleBody = () =>
+        {
+            bodyOpen = !bodyOpen;
+            body.Visibility = bodyOpen ? Visibility.Visible : Visibility.Collapsed;
+            chevron.Text = bodyOpen ? "▾" : "▸";
+            System.Windows.Automation.AutomationProperties.SetName(titleButton, bodyOpen ? "收起联机" : "展开联机");
+        };
+        titleButton.Click += (_, _) => toggleBody();
+        host.Children.Add(titleButton);
+        host.Children.Add(body);
+        body.Children.Add(new TextBlock
         {
             Text = "一般情况都是失败，除非你运营商不拦你IPv6，没有双层NAT...根本没有这样的人！",
             FontSize = 11.5,
@@ -1885,7 +1919,7 @@ public class VersionDetailPanel : UserControl
         _mpInvitePanel.Children.Add(_mpCopyButton);
         createHost.Children.Add(_mpInvitePanel);
         createCard.Child = createHost;
-        host.Children.Add(createCard);
+        body.Children.Add(createCard);
 
         // ---------- 卡片 B:加入房间 ----------
         var joinCard = new Border
@@ -1934,7 +1968,7 @@ public class VersionDetailPanel : UserControl
         joinButton.Click += (_, _) => JoinRoomFromBox();
         joinHost.Children.Add(joinButton);
         joinCard.Child = joinHost;
-        host.Children.Add(joinCard);
+        body.Children.Add(joinCard);
 
         // ---------- 状态反馈区 ----------
         _mpStatusPanel = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(2, 2, 2, 0) };
@@ -1996,7 +2030,7 @@ public class VersionDetailPanel : UserControl
         backup.Click += (_, _) => _mpExpandAdvanced?.Invoke();
         _mpRetryPanel.Children.Add(backup);
         _mpStatusPanel.Children.Add(_mpRetryPanel);
-        host.Children.Add(_mpStatusPanel);
+        body.Children.Add(_mpStatusPanel);
 
         // ---------- 高级选项(默认收起) ----------
         var advancedOptions = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(0, 2, 0, 0) };
@@ -2035,10 +2069,11 @@ public class VersionDetailPanel : UserControl
         advButton.Click += (_, _) => toggleAdv();
         _mpExpandAdvanced = () =>
         {
+            if (!bodyOpen) toggleBody();
             if (!advOpen) toggleAdv();
         };
-        host.Children.Add(advButton);
-        host.Children.Add(advancedOptions);
+        body.Children.Add(advButton);
+        body.Children.Add(advancedOptions);
 
         card.Child = host;
         _multiplayerCard = card;
