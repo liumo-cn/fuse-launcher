@@ -62,15 +62,15 @@ public class UrlMirrorTests
     }
 
     [Fact]
-    public void Candidates_MetaAndObjects_BmclFirst()
+    public void Candidates_MetaBmclFirst_ObjectsOfficialFirst()
     {
         const string meta = "https://piston-meta.mojang.com/v1/packages/aa/1.20.1.json";
         Assert.Equal("https://bmclapi2.bangbang93.com/v1/packages/aa/1.20.1.json", UrlMirror.Candidates(meta)[0]);
         Assert.Equal(meta, UrlMirror.Candidates(meta)[1]);
 
         const string obj = "https://piston-data.mojang.com/v1/objects/aa/client.jar";
-        Assert.Equal("https://bmclapi2.bangbang93.com/v1/objects/aa/client.jar", UrlMirror.Candidates(obj)[0]);
-        Assert.Equal(obj, UrlMirror.Candidates(obj)[1]);
+        Assert.Equal(obj, UrlMirror.Candidates(obj)[0]);
+        Assert.Equal("https://bmclapi2.bangbang93.com/v1/objects/aa/client.jar", UrlMirror.Candidates(obj)[1]);
     }
 
     [Fact]

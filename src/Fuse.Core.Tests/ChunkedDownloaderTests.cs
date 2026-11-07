@@ -158,6 +158,34 @@ public class ChunkedDownloaderTests : IDisposable
         Assert.False(File.Exists(dest + ".chunks.json"));
     }
 
+    [Fact]
+    public async Task CacheHit_SkipsNetwork()
+    {
+        var oldRoot = DownloadCache.Root;
+        DownloadCache.Root = Path.Combine(_dir, "cache");
+        try
+        {
+            var payload = Payload(500_000);
+            _cdn.SetPayload(payload);
+            var dest = Path.Combine(_dir, "cached.jar");
+            var options = new ChunkedDownloadOptions { Parallelism = 2, ChunkBytes = 100_000 };
+            var downloader = new ChunkedDownloader(new HttpClient());
+
+            await downloader.DownloadAsync(_cdn.Url, dest, Sha1(payload), options);
+            File.Delete(dest);
+            _cdn.ResetCounters();
+
+            var second = await downloader.DownloadAsync(_cdn.Url, dest, Sha1(payload), options);
+            Assert.True(second.HashVerified);
+            Assert.Equal(0, _cdn.TotalRangeBytesServed());
+            Assert.Equal(payload, await File.ReadAllBytesAsync(dest));
+        }
+        finally
+        {
+            DownloadCache.Root = oldRoot;
+        }
+    }
+
     /// <summary>
     /// 回归:官方地址返回 403 时必须继续尝试镜像,而不是把整个下载判死。
     /// 2026-11-06 的 ProbeAsync 优化曾在 4xx 上直接 break,而 attempt 本身会换源,

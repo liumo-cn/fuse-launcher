@@ -89,8 +89,39 @@ public static class VersionJsonLoader
             MinecraftArguments = child.MinecraftArguments ?? parent.MinecraftArguments,
 
             Arguments = MergeArguments(parent.Arguments, child.Arguments),
-            Libraries = child.Libraries.Concat(parent.Libraries).ToList(),
+            Libraries = MergeLibraries(parent.Libraries, child.Libraries),
         };
+    }
+
+    /// <summary>
+    /// 子版本优先:同一 group:artifact[:classifier] 只保留子版本那份。
+    /// Fabric 0.20 带 ASM 9.11,原版 1.21.10 带 ASM 9.6;两份都进 classpath 会被
+    /// Fabric loader 判成 duplicate ASM classes 直接退出。
+    /// </summary>
+    private static List<McLibrary> MergeLibraries(
+        IReadOnlyList<McLibrary> parent, IReadOnlyList<McLibrary> child)
+    {
+        var merged = new List<McLibrary>(child.Count + parent.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var lib in child)
+            if (seen.Add(LibraryKey(lib))) merged.Add(lib);
+        foreach (var lib in parent)
+            if (seen.Add(LibraryKey(lib))) merged.Add(lib);
+        return merged;
+    }
+
+    private static string LibraryKey(McLibrary lib)
+    {
+        var name = lib.Name ?? "";
+        var at = name.IndexOf('@');
+        var extension = at >= 0 ? name.Substring(at) : "";
+        if (at >= 0) name = name.Substring(0, at);
+        var parts = name.Split(':');
+        if (parts.Length < 2) return lib.Name ?? "";
+        var key = parts[0] + ":" + parts[1];
+        // classifier 不同的是不同文件(native 各平台),不能互相覆盖
+        if (parts.Length >= 4 && parts[3].Length > 0) key += ":" + parts[3];
+        return key + extension;
     }
 
     private static McArguments? MergeArguments(McArguments? parent, McArguments? child)

@@ -146,8 +146,9 @@ public static class UrlMirror
                 Add(url);
                 break;
             case SourceCategory.Objects:
-                Add(BmclObject(url));
+                // 大文件(客户端 jar)官方 CDN 通常比 BMCL 稳;测速有结果时再按实测排
                 Add(url);
+                Add(BmclObject(url));
                 break;
             case SourceCategory.Maven:
                 var host = HostOf(url);

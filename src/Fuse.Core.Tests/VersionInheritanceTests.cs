@@ -87,6 +87,31 @@ public class VersionInheritanceTests : IDisposable
     }
 
     [Fact]
+    public void Child_OverridesParentLibraryByGroupArtifact()
+    {
+        var child = new JObject
+        {
+            ["id"] = "override-1.20.1",
+            ["inheritsFrom"] = "1.20.1",
+            ["mainClass"] = "example.Main",
+            ["libraries"] = new JArray
+            {
+                new JObject { ["name"] = "org.lwjgl:lwjgl:3.3.3" },
+            },
+        };
+        Directory.CreateDirectory(Path.Combine(_root, "override-1.20.1"));
+        File.WriteAllText(Path.Combine(_root, "override-1.20.1", "override-1.20.1.json"), child.ToString());
+
+        var v = VersionJsonLoader.Load(_root, "override-1.20.1");
+        var lwjgl = v.Libraries.Where(l => l.Name.StartsWith("org.lwjgl:lwjgl:", StringComparison.Ordinal)).ToList();
+
+        Assert.Contains(lwjgl, l => l.Name == "org.lwjgl:lwjgl:3.3.3");
+        Assert.DoesNotContain(lwjgl, l => l.Name == "org.lwjgl:lwjgl:3.3.1");
+        // classifier 不同的 native 文件必须保留
+        Assert.Contains(lwjgl, l => l.Name == "org.lwjgl:lwjgl:3.3.1:natives-windows");
+    }
+
+    [Fact]
     public void Child_GameArgs_ConcatAfterParent()
     {
         var v = VersionJsonLoader.Load(_root, "forge-1.20.1");

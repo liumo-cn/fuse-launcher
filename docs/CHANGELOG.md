@@ -24,6 +24,11 @@
 - 跨游戏目录共享对象缓存：assets / libraries 按 SHA 命名，
   命中时同盘硬链接、跨盘复制，多个 `.minecraft` 目录不重复下同一批文件。
 - 小文件进度按 100ms 节流，几千个文件时不再把 UI 线程刷爆。
+- 客户端 jar 等大文件也进共享缓存；Objects 没测速结果时官方优先，
+  不再默认去 BMCL 上慢拖。
+- 修复版本继承的库重复：同一 group:artifact:classifier 只保留子版本那份。
+  Fabric 0.20 + 1.21.10 的 ASM 9.11 / 9.6 同时进 classpath，
+  Fabric loader 会报 duplicate ASM classes 并退出。
 
 ## 1.2.3 — 2026-11-07
 

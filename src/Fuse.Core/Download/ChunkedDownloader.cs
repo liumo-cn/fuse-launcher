@@ -60,6 +60,21 @@ public sealed class ChunkedDownloader(HttpClient http)
             await Hashing.VerifyFileAsync(destPath, expectedSha1, opts.Algo, cancellation)
                 .ConfigureAwait(false))
         {
+            // 顺手把旧目录里已有的文件挂进共享缓存,别的游戏目录就能直接复用
+            DownloadCache.Store(destPath, expectedSha1, opts.Algo);
+            progress?.Report(1.0);
+            return new ChunkedDownloadResult
+            {
+                DestPath = destPath,
+                TotalBytes = new FileInfo(destPath).Length,
+                HashVerified = true,
+            };
+        }
+
+        // 别的游戏目录已经下过同一个哈希:直接硬链接/复制过来,大文件也不用重下
+        if (DownloadCache.TryGet(expectedSha1, opts.Algo, out var cached) &&
+            DownloadCache.LinkOrCopy(cached, destPath))
+        {
             progress?.Report(1.0);
             return new ChunkedDownloadResult
             {
@@ -103,6 +118,7 @@ public sealed class ChunkedDownloader(HttpClient http)
         {
             await DownloadSingleStreamAsync(url, partPath, progress, cancellation, sourceOffset).ConfigureAwait(false);
             await VerifyOrThrowAsync(partPath, expectedSha1, opts.Algo, cancellation).ConfigureAwait(false);
+            DownloadCache.Store(partPath, expectedSha1, opts.Algo);
             ReplaceFile(partPath, destPath);
             return new ChunkedDownloadResult { DestPath = destPath, TotalBytes = total, HashVerified = true };
         }
@@ -175,6 +191,7 @@ public sealed class ChunkedDownloader(HttpClient http)
                 TryDeleteFile(partPath);
                 await DownloadSingleStreamAsync(url, partPath, progress, cancellation, sourceOffset + 1).ConfigureAwait(false);
                 await VerifyOrThrowAsync(partPath, expectedSha1, opts.Algo, cancellation).ConfigureAwait(false);
+                DownloadCache.Store(partPath, expectedSha1, opts.Algo);
                 ReplaceFile(partPath, destPath);
                 return new ChunkedDownloadResult
                 {
@@ -187,6 +204,7 @@ public sealed class ChunkedDownloader(HttpClient http)
 
         await VerifyOrThrowAsync(partPath, expectedSha1, opts.Algo, cancellation).ConfigureAwait(false);
         File.Delete(statePath);
+        DownloadCache.Store(partPath, expectedSha1, opts.Algo);
         ReplaceFile(partPath, destPath);
 
         return new ChunkedDownloadResult
