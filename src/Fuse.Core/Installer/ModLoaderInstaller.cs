@@ -42,6 +42,7 @@ public static class ModLoaderInstaller
         new[]
         {
             "https://bmclapi2.bangbang93.com/maven",
+            "https://mirrors.cernet.edu.cn/bmclapi",
             "https://mirrors4.qlu.edu.cn/bmclapi",
         },
         "net/minecraftforge/forge",
@@ -54,6 +55,7 @@ public static class ModLoaderInstaller
         "https://neoforged.forgecdn.net/releases",
         new[]
         {
+            "https://mirrors.cernet.edu.cn/bmclapi",
             "https://maven.neoforged.net/releases",
             "https://bmclapi2.bangbang93.com/maven",
             "https://mirrors4.qlu.edu.cn/bmclapi",

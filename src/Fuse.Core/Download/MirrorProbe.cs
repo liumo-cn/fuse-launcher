@@ -47,6 +47,7 @@ public static class MirrorProbe
         {
             "https://maven.minecraftforge.net",
             "https://bmclapi2.bangbang93.com/maven",
+            "https://mirrors.cernet.edu.cn/bmclapi",
             "https://mirrors4.qlu.edu.cn/bmclapi/maven",
         }, "/net/minecraftforge/forge/maven-metadata.xml"),
 
@@ -54,6 +55,7 @@ public static class MirrorProbe
         {
             "https://maven.neoforged.net/releases",
             "https://bmclapi2.bangbang93.com/maven",
+            "https://mirrors.cernet.edu.cn/bmclapi",
             "https://mirrors4.qlu.edu.cn/bmclapi/maven",
         }, "/net/neoforged/neoforge/maven-metadata.xml"),
 

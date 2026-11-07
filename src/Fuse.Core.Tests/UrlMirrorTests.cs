@@ -32,6 +32,7 @@ public class UrlMirrorTests
 
         Assert.Equal(url, list[0]);
         Assert.Contains("https://mirrors.ustc.edu.cn/bmclapi/com/google/guava/guava/31.1-jre/guava-31.1-jre.jar", list);
+        Assert.Contains("https://mirrors.cernet.edu.cn/bmclapi/com/google/guava/guava/31.1-jre/guava-31.1-jre.jar", list);
         Assert.Contains("https://bmclapi2.bangbang93.com/maven/com/google/guava/guava/31.1-jre/guava-31.1-jre.jar", list);
         Assert.Contains("https://mirrors4.qlu.edu.cn/bmclapi/com/google/guava/guava/31.1-jre/guava-31.1-jre.jar", list);
     }
@@ -43,9 +44,21 @@ public class UrlMirrorTests
         var list = UrlMirror.Candidates(url);
 
         Assert.StartsWith("https://mirrors.ustc.edu.cn/bmclapi/", list[0]);
-        Assert.StartsWith("https://bmclapi2.bangbang93.com/maven/", list[1]);
-        Assert.StartsWith("https://mirrors4.qlu.edu.cn/bmclapi/", list[2]);
-        Assert.Equal(url, list[3]);
+        Assert.StartsWith("https://mirrors.cernet.edu.cn/bmclapi/", list[1]);
+        Assert.StartsWith("https://bmclapi2.bangbang93.com/maven/", list[2]);
+        Assert.StartsWith("https://mirrors4.qlu.edu.cn/bmclapi/", list[3]);
+        Assert.Equal(url, list[4]);
+    }
+
+    [Fact]
+    public void Candidates_NeoForge_StripsReleases()
+    {
+        const string url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/20.4.237/neoforge-20.4.237-installer.jar";
+        var list = UrlMirror.Candidates(url);
+
+        Assert.Contains("https://neoforged.forgecdn.net/releases/net/neoforged/neoforge/20.4.237/neoforge-20.4.237-installer.jar", list);
+        Assert.Contains("https://mirrors.cernet.edu.cn/bmclapi/net/neoforged/neoforge/20.4.237/neoforge-20.4.237-installer.jar", list);
+        Assert.Contains(url, list);
     }
 
     [Fact]
@@ -86,14 +99,20 @@ public class UrlMirrorTests
         const string lib = "https://libraries.minecraft.net/com/google/guava/guava/31.1-jre/guava-31.1-jre.jar";
         Assert.Equal(lib, UrlMirror.ForAttempt(lib, 0));
         Assert.StartsWith("https://mirrors.ustc.edu.cn/bmclapi/", UrlMirror.ForAttempt(lib, 1));
-        Assert.StartsWith("https://bmclapi2.bangbang93.com/maven/", UrlMirror.ForAttempt(lib, 2));
-        Assert.StartsWith("https://mirrors4.qlu.edu.cn/bmclapi/", UrlMirror.ForAttempt(lib, 3));
+        Assert.StartsWith("https://mirrors.cernet.edu.cn/bmclapi/", UrlMirror.ForAttempt(lib, 2));
+        Assert.StartsWith("https://bmclapi2.bangbang93.com/maven/", UrlMirror.ForAttempt(lib, 3));
+        Assert.StartsWith("https://mirrors4.qlu.edu.cn/bmclapi/", UrlMirror.ForAttempt(lib, 4));
 
         const string forge = "https://maven.minecraftforge.net/net/minecraftforge/forge/1.20.1-47.2.0/forge-1.20.1-47.2.0-installer.jar";
         Assert.StartsWith("https://mirrors.ustc.edu.cn/bmclapi/", UrlMirror.ForAttempt(forge, 0));
-        Assert.StartsWith("https://bmclapi2.bangbang93.com/maven/", UrlMirror.ForAttempt(forge, 1));
-        Assert.StartsWith("https://mirrors4.qlu.edu.cn/bmclapi/", UrlMirror.ForAttempt(forge, 2));
-        Assert.Equal(forge, UrlMirror.ForAttempt(forge, 3));
+        Assert.StartsWith("https://mirrors.cernet.edu.cn/bmclapi/", UrlMirror.ForAttempt(forge, 1));
+        Assert.StartsWith("https://bmclapi2.bangbang93.com/maven/", UrlMirror.ForAttempt(forge, 2));
+        Assert.StartsWith("https://mirrors4.qlu.edu.cn/bmclapi/", UrlMirror.ForAttempt(forge, 3));
+        Assert.Equal(forge, UrlMirror.ForAttempt(forge, 4));
+
+        const string neo = "https://maven.neoforged.net/releases/net/neoforged/neoforge/20.4.237/neoforge-20.4.237-installer.jar";
+        Assert.StartsWith("https://neoforged.forgecdn.net/releases/", UrlMirror.ForAttempt(neo, 0));
+        Assert.StartsWith("https://mirrors.cernet.edu.cn/bmclapi/", UrlMirror.ForAttempt(neo, 1));
 
         const string meta = "https://piston-meta.mojang.com/v1/packages/aa/1.20.1.json";
         Assert.StartsWith("https://bmclapi2.bangbang93.com/", UrlMirror.ForAttempt(meta, 0));

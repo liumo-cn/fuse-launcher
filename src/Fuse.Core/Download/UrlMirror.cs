@@ -16,7 +16,7 @@ namespace Fuse.Core.Download;
 ///
 /// 现在的策略:
 ///   - **原版批量文件(assets / libraries)= 官方优先**,失败才转镜像;
-///   - **库 / 加载器 maven = USTC 镜像优先**(实测 1.7MB/s 且不限流),BMCL → QLU 兜底;
+///   - **库 / 加载器 maven = USTC / CERNET 镜像优先**,BMCL → QLU 兜底;
 ///   - **元数据与大文件(清单 / 版本 json / piston-data)= BMCL 优先**(请求少、快),失败回官方;
 ///   - 任何一次 429 都会触发 5 分钟"官方模式",避免继续撞限流墙。
 ///   - 2026-11-08 起 Meta / Objects / Maven 会先按类别测真实带宽再排序(3 分钟缓存),
@@ -33,6 +33,11 @@ public static class UrlMirror
     /// 用来接管库/Forge 依赖下载(路径 = /bmclapi/ + maven 路径,assets/元数据它没有)。
     /// </summary>
     private const string UstcMaven = "https://mirrors.ustc.edu.cn/bmclapi/";
+    /// <summary>
+    /// CERNET/JCUT 的 BMCLAPI maven 镜像。只有 maven 目录(库/Forge/NeoForge/Fabric),
+    /// 没有 meta/objects/assets;路径同样是 /bmclapi/ + maven 路径。
+    /// </summary>
+    private const string CernetMaven = "https://mirrors.cernet.edu.cn/bmclapi/";
     /// <summary>NeoForged 官方 CDN(与 maven.neoforged.net 同构,国内实测快一个数量级)。</summary>
     private const string NeoCdn = "https://neoforged.forgecdn.net";
 
@@ -151,6 +156,7 @@ public static class UrlMirror
                 {
                     Add(url);
                     Add(UstcMaven + path);
+                    Add(CernetMaven + path);
                     Add(Bmcl + "/maven/" + path);
                     Add(QluMaven + path);
                 }
@@ -160,6 +166,7 @@ public static class UrlMirror
                     if (path.StartsWith("releases/", StringComparison.OrdinalIgnoreCase))
                         path = path.Substring("releases/".Length);
                     Add(NeoCdnUrl(url));
+                    Add(CernetMaven + path);
                     Add(Bmcl + "/maven/" + path);
                     Add(QluMaven + path);
                     Add(url);
@@ -168,6 +175,7 @@ public static class UrlMirror
                 else
                 {
                     Add(UstcMaven + path);
+                    Add(CernetMaven + path);
                     Add(Bmcl + "/maven/" + path);
                     Add(QluMaven + path);
                     Add(url);
