@@ -2069,10 +2069,25 @@ public class VersionDetailPanel : UserControl
             Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
             Height = 44,
             Padding = new Thickness(14, 0, 14, 0),
+            Margin = new Thickness(0, 0, 8, 0),
         };
         System.Windows.Automation.AutomationProperties.SetName(lan, "安装简单联机");
         lan.Click += (_, _) => InstallMultiplayerMod(new[] { "lan-server-properties", "custom-lan" }, "简单联机");
         modRow.Children.Add(lan);
+        var offline = new Button
+        {
+            Content = "安装离线局域网",
+            Style = (Style)Application.Current.Resources["GlassSecondaryButton"],
+            Height = 44,
+            Padding = new Thickness(14, 0, 14, 0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(offline, "安装离线局域网");
+        offline.Click += (_, _) =>
+        {
+            InstallMultiplayerMod(new[] { "offlinelan" }, "离线局域网");
+            Toast("装好后重启游戏，对局域网开放时把在线模式关掉", _multiplayerCard);
+        };
+        modRow.Children.Add(offline);
         options.Children.Add(modRow);
 
         // 2. 口令直连
