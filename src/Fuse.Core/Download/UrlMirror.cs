@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Fuse.Core.Download;
 
@@ -18,6 +19,8 @@ namespace Fuse.Core.Download;
 ///   - **库 / 加载器 maven = USTC 镜像优先**(实测 1.7MB/s 且不限流),BMCL → QLU 兜底;
 ///   - **元数据与大文件(清单 / 版本 json / piston-data)= BMCL 优先**(请求少、快),失败回官方;
 ///   - 任何一次 429 都会触发 5 分钟"官方模式",避免继续撞限流墙。
+///   - 2026-11-08 起 Meta / Objects / Maven 会先按类别测真实带宽再排序(3 分钟缓存),
+///     Assets 仍保持官方优先,避免 BMCL 10 次/分钟的限流被几千个小文件打爆。
 /// 其它域(Modrinth CDN 等)保持原样——它们各自已有镜像策略。
 /// </summary>
 public static class UrlMirror
@@ -44,6 +47,16 @@ public static class UrlMirror
         Mirror,
     }
 
+    /// <summary>按资源类型分组测速,避免拿元数据的延迟去代表大文件带宽。</summary>
+    public enum SourceCategory
+    {
+        Other,
+        Meta,
+        Objects,
+        Maven,
+        Assets,
+    }
+
     /// <summary>当前下载源策略。</summary>
     public static SourceMode Mode { get; set; } = SourceMode.Balanced;
 
@@ -55,8 +68,8 @@ public static class UrlMirror
     }
 
     /// <summary>
-    /// 第 attempt 次尝试使用的地址。
-    /// Balanced 按资源类型决定第一次用官方还是镜像,之后在另一侧重试。
+    /// 第 attempt 次尝试使用的地址。Balanced 会按类别和主机查询实测排序,
+    /// 没有测速结果时回退到原来的固定顺序。
     /// </summary>
     public static string ForAttempt(string url, int attempt)
     {
@@ -68,29 +81,153 @@ public static class UrlMirror
         // 熔断期(刚被 429)内一律官方,避免继续撞限流墙
         if (_degradedUntil > DateTime.UtcNow) return url;
 
-        // 加载器 maven:官方国内实测 20s+,必须镜像优先;USTC → BMCL → QLU → 官方
-        if (IsLoaderMaven(url))
-            return attempt <= 2 ? Rewrite(url, attempt) : url;
+        var candidates = Candidates(url);
+        if (candidates.Count == 1) return candidates[0];
 
-        // 原版批量文件:官方优先(BMCL 10 次/分钟扛不住几千个文件),
-        // 失败后先转 USTC maven(库)/ BMCL(资源)
-        if (IsBulkFile(url))
-            return attempt == 0 ? url : Rewrite(url, attempt - 1);
+        var category = CategoryOf(url);
 
-        // 元数据/大文件:BMCL 优先(请求少、实测快),失败回官方
-        return attempt == 0 ? Rewrite(url, attempt) : url;
+        // 资源文件是几千个小文件,BMCL 只有 10 次/分钟,不参与测速重排
+        if (category == SourceCategory.Assets)
+            return candidates[Math.Min(attempt, candidates.Count - 1)];
+
+        var key = category + "|" + HostOf(url);
+        var measured = MirrorProbe.TryOrderForUrl(key, candidates);
+        var order = measured ?? candidates;
+        return order[Math.Min(attempt, order.Count - 1)];
     }
 
-    /// <summary>原版批量文件:assets 与官方库(数量大,走官方避免限流)。</summary>
-    private static bool IsBulkFile(string url)
-        => url.StartsWith("https://resources.download.minecraft.net/", StringComparison.OrdinalIgnoreCase)
-           || url.StartsWith("https://libraries.minecraft.net/", StringComparison.OrdinalIgnoreCase);
+    /// <summary>资源类型:决定候选源列表和测速分组。</summary>
+    public static SourceCategory CategoryOf(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return SourceCategory.Other;
+        if (url.StartsWith("https://resources.download.minecraft.net/", StringComparison.OrdinalIgnoreCase))
+            return SourceCategory.Assets;
+        if (url.StartsWith("https://libraries.minecraft.net/", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("https://maven.minecraftforge.net/", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("https://maven.neoforged.net/", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("https://maven.fabricmc.net/", StringComparison.OrdinalIgnoreCase))
+            return SourceCategory.Maven;
+        if (url.StartsWith("https://piston-data.mojang.com/", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("https://launcher.mojang.com/", StringComparison.OrdinalIgnoreCase))
+            return SourceCategory.Objects;
+        if (url.StartsWith("https://piston-meta.mojang.com/", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("https://launchermeta.mojang.com/", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("https://meta.fabricmc.net/", StringComparison.OrdinalIgnoreCase))
+            return SourceCategory.Meta;
+        return SourceCategory.Other;
+    }
 
-    /// <summary>是否属于 Forge/NeoForge 的 maven(国内直连很慢,应优先镜像)。</summary>
-    private static bool IsLoaderMaven(string url)
-        => url.StartsWith("https://maven.minecraftforge.net/", StringComparison.OrdinalIgnoreCase)
-           || url.StartsWith("https://maven.neoforged.net/", StringComparison.OrdinalIgnoreCase)
-           || url.StartsWith("https://maven.fabricmc.net/", StringComparison.OrdinalIgnoreCase);
+    /// <summary>某个官方地址的候选源,按原来的固定优先级排列。</summary>
+    public static IReadOnlyList<string> Candidates(string url)
+    {
+        var list = new List<string>();
+        void Add(string? value)
+        {
+            if (string.IsNullOrEmpty(value)) return;
+            foreach (var existing in list)
+                if (string.Equals(existing, value, StringComparison.OrdinalIgnoreCase)) return;
+            list.Add(value!);
+        }
+
+        var category = CategoryOf(url);
+        switch (category)
+        {
+            case SourceCategory.Assets:
+                Add(url);
+                Add(BmclAssets(url));
+                break;
+            case SourceCategory.Meta:
+                Add(BmclMeta(url));
+                Add(url);
+                break;
+            case SourceCategory.Objects:
+                Add(BmclObject(url));
+                Add(url);
+                break;
+            case SourceCategory.Maven:
+                var host = HostOf(url);
+                var path = PathAfterHost(url);
+                if (host.Equals("libraries.minecraft.net", StringComparison.OrdinalIgnoreCase))
+                {
+                    Add(url);
+                    Add(UstcMaven + path);
+                    Add(Bmcl + "/maven/" + path);
+                    Add(QluMaven + path);
+                }
+                else if (host.Equals("maven.neoforged.net", StringComparison.OrdinalIgnoreCase))
+                {
+                    // NeoForge 官方路径带 releases/,BMCL/USTC/QLU 的 maven 根下没有这一段
+                    if (path.StartsWith("releases/", StringComparison.OrdinalIgnoreCase))
+                        path = path.Substring("releases/".Length);
+                    Add(NeoCdnUrl(url));
+                    Add(Bmcl + "/maven/" + path);
+                    Add(QluMaven + path);
+                    Add(url);
+                    Add(UstcMaven + path);
+                }
+                else
+                {
+                    Add(UstcMaven + path);
+                    Add(Bmcl + "/maven/" + path);
+                    Add(QluMaven + path);
+                    Add(url);
+                }
+                break;
+            default:
+                Add(url);
+                break;
+        }
+
+        if (list.Count == 0) list.Add(url);
+        return list;
+    }
+
+    private static string HostOf(string url)
+    {
+        var scheme = url.IndexOf("://", StringComparison.Ordinal);
+        if (scheme < 0) return "";
+        var start = scheme + 3;
+        var end = url.IndexOf('/', start);
+        return end < 0 ? url.Substring(start) : url.Substring(start, end - start);
+    }
+
+    private static string PathAfterHost(string url)
+    {
+        var scheme = url.IndexOf("://", StringComparison.Ordinal);
+        if (scheme < 0) return "";
+        var slash = url.IndexOf('/', scheme + 3);
+        return slash < 0 ? "" : url.Substring(slash + 1);
+    }
+
+    private static string? BmclMeta(string url)
+    {
+        var path = Prefix(url, "https://piston-meta.mojang.com/")
+                   ?? Prefix(url, "https://launchermeta.mojang.com/");
+        if (path != null) return Bmcl + "/" + path;
+        path = Prefix(url, "https://meta.fabricmc.net/");
+        return path == null ? null : Bmcl + "/fabric-meta/" + path;
+    }
+
+    private static string? BmclObject(string url)
+    {
+        var path = Prefix(url, "https://piston-data.mojang.com/")
+                   ?? Prefix(url, "https://launcher.mojang.com/");
+        return path == null ? null : Bmcl + "/" + path;
+    }
+
+    private static string? BmclAssets(string url)
+    {
+        var path = Prefix(url, "https://resources.download.minecraft.net/");
+        return path == null ? null : Bmcl + "/assets/" + path;
+    }
+
+    private static string? NeoCdnUrl(string url)
+    {
+        var path = Prefix(url, "https://maven.neoforged.net/releases/");
+        if (path != null) return NeoCdn + "/releases/" + path;
+        path = Prefix(url, "https://maven.neoforged.net/");
+        return path == null ? null : NeoCdn + "/" + path;
+    }
 
     /// <summary>限流熔断截止时间:一旦收到 429,这段时间内所有请求直接走官方源。</summary>
     private static DateTime _degradedUntil = DateTime.MinValue;
