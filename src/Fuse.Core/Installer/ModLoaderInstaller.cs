@@ -26,6 +26,8 @@ namespace Fuse.Core.Installer;
 public static class ModLoaderInstaller
 {
     private static readonly TimeSpan OfficialTimeout = TimeSpan.FromSeconds(90);
+    private static readonly string InstallerCacheDir =
+        Path.Combine(Path.GetTempPath(), "FuseLauncher", "loader-cache");
 
     /// <summary>加载器类型。Mirrors 按优先级排列,官方超时/失败时依次尝试。</summary>
     public sealed record LoaderFlavor(
@@ -150,19 +152,82 @@ public static class ModLoaderInstaller
     public static async Task<JObject> FetchInstallerVersionJsonAsync(
         HttpClient http, LoaderFlavor flavor, string gameVersion, string loaderVersion, CancellationToken ct)
     {
-        var bytes = await DownloadInstallerAsync(http, flavor, gameVersion, loaderVersion, ct).ConfigureAwait(false);
+        var bytes = await DownloadInstallerAsync(http, flavor, gameVersion, loaderVersion, null, null, ct)
+            .ConfigureAwait(false);
         return ParseVersionJson(bytes, flavor, loaderVersion);
     }
 
-    /// <summary>下载 installer.jar 本体(官方失败自动换镜像)。</summary>
+    /// <summary>
+    /// 下载 installer.jar 本体:分块 + 断点 + SHA-1 校验,失败逐个换源。
+    /// 镜像对 .sha1 的支持不一致,先从所有源里找一个可用的哈希。
+    /// </summary>
     public static async Task<byte[]> DownloadInstallerAsync(
-        HttpClient http, LoaderFlavor flavor, string gameVersion, string loaderVersion, CancellationToken ct)
+        HttpClient http, LoaderFlavor flavor, string gameVersion, string loaderVersion,
+        string? cacheDir, IProgress<double>? progress, CancellationToken ct)
     {
         var rel = InstallerRelPath(flavor, gameVersion, loaderVersion);
         var sources = Download.MirrorProbe.Order(flavor.Key,
             new[] { flavor.OfficialMaven }.Concat(flavor.Mirrors));
-        return await GetBytesFromSourcesAsync(http,
-            sources.Select(s => $"{s}/{rel}").ToArray(), ct).ConfigureAwait(false);
+        var urls = sources.Select(s => $"{s.TrimEnd('/')}/{rel}").ToArray();
+        var expected = await TryFetchSha1Async(http, urls, ct).ConfigureAwait(false);
+
+        var dir = string.IsNullOrEmpty(cacheDir) ? InstallerCacheDir : cacheDir!;
+        Directory.CreateDirectory(dir);
+        var dest = Path.Combine(dir, $"{flavor.Key}-{gameVersion}-{loaderVersion}-installer.jar");
+
+        Exception? last = null;
+        foreach (var url in urls)
+        {
+            try
+            {
+                // 这里传的是镜像的完整地址;ChunkedDownloader 不再改写它,
+                // 分块失败会先重试同一源,再试单流,最后交给外层换下一个源。
+                await new ChunkedDownloader(http).DownloadAsync(
+                    url, dest, expected,
+                    new ChunkedDownloadOptions { Parallelism = 4, MaxRetriesPerChunk = 3 },
+                    progress, ct).ConfigureAwait(false);
+                return File.ReadAllBytes(dest);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+            }
+        }
+
+        throw new IOException($"{flavor.Display} 安装包下载失败:{last?.Message}", last);
+    }
+
+    /// <summary>从各源的 .sha1 sidecar 里找一个 40 位十六进制哈希;找不到返回 null。</summary>
+    private static async Task<string?> TryFetchSha1Async(
+        HttpClient http, string[] urls, CancellationToken ct)
+    {
+        foreach (var url in urls)
+        {
+            try
+            {
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(TimeSpan.FromSeconds(10));
+                using var response = await http.GetAsync(url + ".sha1", cts.Token).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode) continue;
+                var text = (await response.Content.ReadAsStringAsync().ConfigureAwait(false)).Trim();
+                var match = System.Text.RegularExpressions.Regex.Match(
+                    text, @"\b[0-9a-fA-F]{40}\b");
+                if (match.Success) return match.Value.ToLowerInvariant();
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                // 换下一个源
+            }
+        }
+        return null;
     }
 
     private static JObject ParseVersionJson(byte[] installerBytes, LoaderFlavor flavor, string loaderVersion)
@@ -285,8 +350,11 @@ public static class ModLoaderInstaller
         IProgress<double>? progress, CancellationToken ct)
     {
         progress?.Report(0.03);
-        var installerBytes = await DownloadInstallerAsync(http, flavor, gameVersion, loaderVersion, ct)
-            .ConfigureAwait(false);
+        var installerProgress = progress == null
+            ? null
+            : new CallbackProgress(p => progress.Report(0.03 + p * 0.09));
+        var installerBytes = await DownloadInstallerAsync(http, flavor, gameVersion, loaderVersion,
+            tempRoot, installerProgress, ct).ConfigureAwait(false);
         var installerJson = ParseVersionJson(installerBytes, flavor, loaderVersion);
         // processors 在 install_profile.json 里(version.json 没有),有它就必须跑官方 installer
         var needsProcessors = InstallerHasProcessors(installerBytes);
