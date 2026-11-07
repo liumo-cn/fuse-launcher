@@ -742,6 +742,8 @@ public static class AppServices
         }
         Http.DefaultRequestHeaders.UserAgent.ParseAdd(
             "FuseLauncher/" + AppVersion + " Java/17.0.15 (Windows 10; x64; minecraft launcher)");
+        // 跨游戏目录的只读对象缓存(按哈希命名;同盘硬链接,跨盘复制)
+        Fuse.Core.Download.DownloadCache.Root = Path.Combine(Config.InstallDirectory, "cache", "objects");
         Accounts.Load();
         VersionProfiles = new VersionProfiles(ProfilesStorePath);
         ApplyTheme();

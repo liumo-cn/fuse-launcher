@@ -69,6 +69,8 @@ public sealed class SmallFileDownloader(HttpClient http)
         // 失败/429 时回退。避免"几千个文件各自 Task.Run 等信号量"的调度开销。
         var queue = new ConcurrentQueue<FileDownloadItem>(list);
         var remaining = list.Count;
+        var lastReport = DateTime.MinValue;
+        var reportLock = new object();
         using var limiter = new AdaptiveLimiter(opts.InitialParallelism, opts.Parallelism);
         var workers = Enumerable.Range(0, Math.Max(1, opts.Parallelism)).Select(_ => Task.Run(async () =>
         {
@@ -109,7 +111,19 @@ public sealed class SmallFileDownloader(HttpClient http)
                     limiter.NoteResult(ok);
                     Interlocked.Decrement(ref remaining);
                     var d = Interlocked.Increment(ref done);
-                    progress?.Report(d / (double)list.Count);
+                    if (progress != null)
+                    {
+                        lock (reportLock)
+                        {
+                            var now = DateTime.UtcNow;
+                            // 100ms 节流:几千个小文件逐个 Report 会把 UI 线程淹掉
+                            if (d == list.Count || (now - lastReport).TotalMilliseconds >= 100)
+                            {
+                                lastReport = now;
+                                progress.Report(d / (double)list.Count);
+                            }
+                        }
+                    }
                 }
             }
         }, cancellation)).ToArray();
@@ -202,6 +216,11 @@ public sealed class SmallFileDownloader(HttpClient http)
                 return false;
         }
 
+        // 别的游戏目录已经下过同一个哈希:直接硬链接/复制过来
+        if (DownloadCache.TryGet(item.ExpectedHash, item.Algo, out var cached) &&
+            DownloadCache.LinkOrCopy(cached, item.DestPath))
+            return true;
+
         var tmpPath = item.DestPath + ".tmp";
         Exception? last = null;
         for (var attempt = 0; attempt <= opts.MaxRetries; attempt++)
@@ -258,6 +277,8 @@ public sealed class SmallFileDownloader(HttpClient http)
                 if (!await Hashing.VerifyFileAsync(tmpPath, item.ExpectedHash, item.Algo, ct).ConfigureAwait(false))
                     throw new IOException("校验不通过：文件可能损坏或被篡改");
 
+                // 先挂到共享缓存(同盘是硬链接),再改名为目标文件
+                DownloadCache.Store(tmpPath, item.ExpectedHash, item.Algo);
                 if (File.Exists(item.DestPath)) File.Delete(item.DestPath);
                 File.Move(tmpPath, item.DestPath);
                 return true;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -112,6 +113,55 @@ public class SmallFileDownloaderTests : IDisposable
         Assert.Empty(result.Failed);
         Assert.Equal(20, result.Downloaded);
         Assert.InRange(handler.MaxConcurrency, 2, 4);
+    }
+
+    [Fact]
+    public async Task CacheHit_SkipsSecondNetworkDownload()
+    {
+        var oldRoot = DownloadCache.Root;
+        DownloadCache.Root = Path.Combine(_dir, "cache");
+        try
+        {
+            var payload = Encoding.UTF8.GetBytes("cached");
+            var hash = Convert.ToHexString(SHA1.HashData(payload)).ToLowerInvariant();
+            var handler = new CacheHandler(payload);
+            var downloader = new SmallFileDownloader(new HttpClient(handler));
+            var options = new SmallFileOptions { Parallelism = 1, InitialParallelism = 1 };
+
+            var first = await downloader.DownloadSetAsync(new[]
+            {
+                Item("http://a/x", Path.Combine(_dir, "one.bin"), hash),
+            }, options);
+            Assert.Equal(1, handler.Requests);
+            Assert.Empty(first.Failed);
+
+            var second = await downloader.DownloadSetAsync(new[]
+            {
+                Item("http://a/x", Path.Combine(_dir, "two.bin"), hash),
+            }, options);
+            Assert.Equal(1, handler.Requests); // 第二次直接命中缓存,没有再发请求
+            Assert.Empty(second.Failed);
+            Assert.Equal(payload, await File.ReadAllBytesAsync(Path.Combine(_dir, "two.bin")));
+        }
+        finally
+        {
+            DownloadCache.Root = oldRoot;
+        }
+    }
+
+    private sealed class CacheHandler(byte[] payload) : HttpMessageHandler
+    {
+        public int Requests;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref Requests);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(payload),
+            });
+        }
     }
 
     private sealed class MapHandler(Dictionary<string, byte[]> payloads) : HttpMessageHandler
