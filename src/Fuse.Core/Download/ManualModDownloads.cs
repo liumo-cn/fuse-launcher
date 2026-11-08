@@ -12,6 +12,9 @@ namespace Fuse.Core.Download;
 public sealed class ManualModDownload
 {
     public string Name { get; set; } = "";
+    /// <summary>落盘文件名;老任务从错误文本解析时只有 Name</summary>
+    public string FileName { get; set; } = "";
+    public string? Sha1 { get; set; }
     public int ProjectId { get; set; }
     public int FileId { get; set; }
     /// <summary>从 API 补到的项目 slug / 官网地址;老任务没有,点按钮时再查</summary>
@@ -111,6 +114,33 @@ public static class ManualModDownloads
                 Add(result, seen, "", bare.Groups["pid"].Value, bare.Groups["fid"].Value);
         }
         return result;
+    }
+
+    /// <summary>
+    /// 用户是否已经把文件放进 mods。有 SHA1 就校验,没有只看存在且非空;
+    /// 重试时用这个判断,已经下好的不该继续报失败。
+    /// </summary>
+    public static bool IsPresent(string? modsDir, ManualModDownload mod)
+    {
+        if (string.IsNullOrEmpty(modsDir) || mod == null) return false;
+        var name = !string.IsNullOrEmpty(mod.FileName) ? mod.FileName : mod.Name;
+        if (string.IsNullOrEmpty(name)) return false;
+        try
+        {
+            var path = Path.Combine(modsDir, name);
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length <= 0) return false;
+            if (string.IsNullOrEmpty(mod.Sha1) || mod.Sha1.Length != 40) return true;
+            using var sha = System.Security.Cryptography.SHA1.Create();
+            using var stream = File.OpenRead(path);
+            var hash = BitConverter.ToString(sha.ComputeHash(stream))
+                .Replace("-", "").ToLowerInvariant();
+            return string.Equals(hash, mod.Sha1, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>手动模组该放进哪个 mods 文件夹;识别不出返回 null。</summary>

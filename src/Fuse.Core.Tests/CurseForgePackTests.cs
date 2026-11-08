@@ -123,6 +123,56 @@ public class CurseForgePackTests : IDisposable
                 new System.Net.Http.HttpClient(), 1, packZip, Path.Combine(_dir, "out.mrpack"), null, cts.Token));
     }
 
+    [Fact]
+    public async Task BuildCurseForgeMrpack_ReportsMissingRequiredFiles()
+    {
+        var packZip = Path.Combine(_dir, "pack.zip");
+        using (var zip = ZipFile.Open(packZip, ZipArchiveMode.Create))
+        {
+            var manifest = new JObject
+            {
+                ["minecraft"] = new JObject
+                {
+                    ["version"] = "1.12.2",
+                    ["modLoaders"] = new JArray { new JObject { ["id"] = "forge-14.23.5.2860" } },
+                },
+                ["files"] = new JArray
+                {
+                    new JObject { ["projectID"] = 1, ["fileID"] = 2, ["required"] = true },
+                },
+            };
+            using var w = new StreamWriter(zip.CreateEntry("manifest.json").Open());
+            w.Write(manifest.ToString());
+        }
+
+        // 作者关闭第三方 API 分发:有文件名和哈希,但没有 downloadUrl
+        var response = new JObject
+        {
+            ["data"] = new JObject
+            {
+                ["id"] = 2,
+                ["modId"] = 1,
+                ["displayName"] = "Manual Mod",
+                ["fileName"] = "manual-mod.jar",
+                ["downloadUrl"] = null,
+                ["fileLength"] = 10,
+                ["gameVersions"] = new JArray("1.12.2"),
+                ["hashes"] = new JArray { new JObject { ["algo"] = 1, ["value"] = new string('a', 40) } },
+            },
+        };
+        CurseForgeSource.Configure(new FakeTransport(response.ToString()));
+
+        var missing = await ModpackInstaller.BuildCurseForgeMrpackAsync(
+            new System.Net.Http.HttpClient(), 1, packZip,
+            Path.Combine(_dir, "out.mrpack"), null, CancellationToken.None);
+
+        var one = Assert.Single(missing);
+        Assert.Equal("manual-mod.jar", one.FileName);
+        Assert.Equal(1, one.ProjectId);
+        Assert.Equal(2, one.FileId);
+        Assert.Equal(new string('a', 40), one.Sha1);
+    }
+
     private sealed class FakeTransport(string json) : ICurseForgeTransport
     {
         public Task<string> GetAsync(string pathAndQuery, CancellationToken ct)

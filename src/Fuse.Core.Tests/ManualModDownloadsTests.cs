@@ -102,6 +102,38 @@ public class ManualModDownloadsTests
     }
 
     [Fact]
+    public void IsPresent_ChecksFileSizeAndSha1()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "fuse-mods-" + System.Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var path = Path.Combine(dir, "a.jar");
+            Assert.False(ManualModDownloads.IsPresent(dir, new ManualModDownload { Name = "a.jar" }));
+
+            File.WriteAllText(path, "hello");
+            Assert.True(ManualModDownloads.IsPresent(dir, new ManualModDownload { Name = "a.jar" }));
+            Assert.True(ManualModDownloads.IsPresent(dir,
+                new ManualModDownload { Name = "ignored", FileName = "a.jar" }));
+
+            using var sha = System.Security.Cryptography.SHA1.Create();
+            var hash = System.BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(path)))
+                .Replace("-", "").ToLowerInvariant();
+            Assert.True(ManualModDownloads.IsPresent(dir,
+                new ManualModDownload { Name = "a.jar", Sha1 = hash }));
+            Assert.False(ManualModDownloads.IsPresent(dir,
+                new ManualModDownload { Name = "a.jar", Sha1 = new string('b', 40) }));
+
+            File.WriteAllText(path, "");
+            Assert.False(ManualModDownloads.IsPresent(dir, new ManualModDownload { Name = "a.jar" }));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
+    [Fact]
     public void ParseFromMessage_PlainErrorReturnsEmpty()
     {
         Assert.Empty(ManualModDownloads.ParseFromMessage("connection reset by peer"));

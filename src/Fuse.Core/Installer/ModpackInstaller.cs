@@ -27,6 +27,9 @@ public static class ModpackInstaller
 
     public sealed record ModpackFile(string RelativePath, string Url, string? Sha1);
 
+    /// <summary>作者禁止第三方 API 下载、需要用户手动补的文件。</summary>
+    public sealed record MissingModFile(string FileName, int ProjectId, int FileId, string? Sha1);
+
     /// <summary>解析 .mrpack 内的 modrinth.index.json。</summary>
     public static ModpackIndex ParseIndex(string extractDir)
     {
@@ -127,7 +130,7 @@ public static class ModpackInstaller
     /// 逐个 fileID 查 API 拿 downloadUrl,再写 modrinth.index.json。
     /// 解析过程带 CancellationToken,放回队列里执行,暂停/进度才有效。
     /// </summary>
-    public static async Task<IReadOnlyList<string>> BuildCurseForgeMrpackAsync(
+    public static async Task<IReadOnlyList<MissingModFile>> BuildCurseForgeMrpackAsync(
         HttpClient http, int projectId, string packZipPath, string outMrpackPath,
         IProgress<double>? progress, CancellationToken ct, Action<string>? log = null)
     {
@@ -148,7 +151,7 @@ public static class ModpackInstaller
 
         var files = (manifest["files"] as JArray) ?? new JArray();
         var indexFiles = new JArray();
-        var missing = new List<string>();
+        var missing = new List<MissingModFile>();
         var total = Math.Max(1, files.Count);
         var done = 0;
         foreach (var f in files.OfType<JObject>())
@@ -223,9 +226,8 @@ public static class ModpackInstaller
             {
                 // 必需文件拿不到 URL(作者禁止第三方 API 下载):保留文件名,
                 // 先装其余文件,最后让调用方明确提示手动补哪几个 jar。
-                missing.Add(meta != null && !string.IsNullOrWhiteSpace(meta.FileName)
-                    ? meta.FileName + " (" + pid + "/" + fid + ")"
-                    : pid + "/" + fid);
+                missing.Add(new MissingModFile(
+                    meta?.FileName ?? "", pid, fid, meta?.Sha1));
             }
 
             done++;

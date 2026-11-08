@@ -263,7 +263,7 @@ public sealed class DownloadQueue
         if (record == null || !onlyFrom.Contains(record.Status)) return;
         record.Status = DownloadTaskStatus.Queued;
         record.Pausing = false;
-        record.ErrorMessage = null;
+        // ErrorMessage 留着:重试时整合包执行器要从上次错误里回捞手动模组清单
         _store.Upsert(record);
         OnChanged(record);
         Pump();
@@ -323,9 +323,6 @@ public sealed class DownloadQueue
         });
         record.Status = DownloadTaskStatus.Downloading;
         record.Pausing = false;
-        record.ErrorMessage = null;
-        record.ManualMods = null;
-        record.ManualModsDir = null;
         _store.Upsert(record);
         OnChanged(record);
         Trace("run " + record.TaskId + " (" + record.Kind + ")");
@@ -336,6 +333,7 @@ public sealed class DownloadQueue
             record.Pausing = false;
             record.Status = DownloadTaskStatus.Completed;
             record.Progress = 1;
+            record.ErrorMessage = null;
             record.FinishedAt = DateTime.Now;
             Trace("completed " + record.TaskId);
         }
@@ -575,6 +573,25 @@ public sealed class DownloadQueue
         private async Task ExecuteModpackInstallAsync(
             DownloadTaskRecord record, IProgress<double> progress, CancellationToken cancellation)
         {
+            // 上次失败时列出的手动模组,用户可能已经下好放进 mods 了。
+            // 全部就位就直接算完成,不再把整包重下一遍。
+            var manual = record.ManualMods is { Count: > 0 }
+                ? record.ManualMods!
+                : ManualModDownloads.ParseFromMessage(record.ErrorMessage);
+            var manualDir = record.ManualModsDir
+                            ?? ManualModDownloads.ModsDirectoryFromMessage(record.ErrorMessage);
+            if (manual.Count > 0 && !string.IsNullOrEmpty(manualDir) &&
+                manual.All(m => ManualModDownloads.IsPresent(manualDir, m)))
+            {
+                Trace("modpack retry: manual mods already present in " + manualDir);
+                record.ManualMods = null;
+                record.ManualModsDir = null;
+                progress.Report(1.0);
+                return;
+            }
+            record.ManualMods = null;
+            record.ManualModsDir = null;
+
             var meta = JsonConvert.DeserializeObject<ModpackInstallMeta>(record.Meta ?? "{}")
                        ?? new ModpackInstallMeta();
             var hasLocalPack = !string.IsNullOrEmpty(meta.MrpackLocalPath) && File.Exists(meta.MrpackLocalPath);
@@ -596,7 +613,8 @@ public sealed class DownloadQueue
                 Trace("modpack " + packVersionId + ": source=" + (hasLocalPack ? "local file" : meta.MrpackUrl));
                 try
                 {
-                    IReadOnlyList<string> cfMissingFiles = Array.Empty<string>();
+                    IReadOnlyList<Installer.ModpackInstaller.MissingModFile> cfMissingFiles =
+                        Array.Empty<Installer.ModpackInstaller.MissingModFile>();
                     var mrpackPath = Path.Combine(tempRoot, "pack.mrpack");
                     if (hasLocalPack)
                     {
@@ -747,23 +765,56 @@ public sealed class DownloadQueue
                         tempRoot, gameDir, Installer.ModpackInstaller.ReservedPaths(index.Files), cancellation);
                     if (cfMissingFiles.Count > 0)
                     {
-                        var list = string.Join(Environment.NewLine, cfMissingFiles.Select(x => "· " + x));
+                        var modsDir = Path.Combine(gameDir, "mods");
                         var missingPath = Path.Combine(gameDir, "需手动下载的模组.txt");
-                        try
+                        // 用户可能上次失败后已经手动把文件放进 mods:这次能对上就直接算完成
+                        var stillMissing = cfMissingFiles
+                            .Where(x => !ManualModDownloads.IsPresent(modsDir, new ManualModDownload
+                            {
+                                Name = x.FileName,
+                                FileName = x.FileName,
+                                Sha1 = x.Sha1,
+                                ProjectId = x.ProjectId,
+                                FileId = x.FileId,
+                            }))
+                            .ToList();
+
+                        if (stillMissing.Count == 0)
                         {
-                            File.WriteAllText(missingPath,
-                                "以下模组作者禁止第三方 API 下载，请从 CurseForge 网页下载后放进本目录的 mods 文件夹："
-                                + Environment.NewLine + list + Environment.NewLine);
+                            Trace("modpack " + packVersionId + ": manual mods found in " + modsDir);
+                            try { if (File.Exists(missingPath)) File.Delete(missingPath); }
+                            catch (IOException) { }
                         }
-                        catch (IOException)
+                        else
                         {
+                            Func<Installer.ModpackInstaller.MissingModFile, string> label = x =>
+                                string.IsNullOrEmpty(x.FileName)
+                                    ? x.ProjectId + "/" + x.FileId
+                                    : x.FileName + " (" + x.ProjectId + "/" + x.FileId + ")";
+                            var list = string.Join(Environment.NewLine, stillMissing.Select(x => "· " + label(x)));
+                            try
+                            {
+                                File.WriteAllText(missingPath,
+                                    "以下模组作者禁止第三方 API 下载，请从 CurseForge 网页下载后放进本目录的 mods 文件夹："
+                                    + Environment.NewLine + list + Environment.NewLine);
+                            }
+                            catch (IOException)
+                            {
+                            }
+                            // 带上结构化清单:原因弹窗可以直接一键开网页,不用再解析文字
+                            record.ManualModsDir = modsDir;
+                            record.ManualMods = stillMissing.Select(x => new ManualModDownload
+                            {
+                                Name = x.FileName,
+                                FileName = x.FileName,
+                                Sha1 = x.Sha1,
+                                ProjectId = x.ProjectId,
+                                FileId = x.FileId,
+                            }).ToList();
+                            throw new IOException(
+                                "整合包已安装，但需手动下载 " + stillMissing.Count + " 个模组（作者禁止第三方 API 下载）。"
+                                + "清单已写到 " + missingPath + Environment.NewLine + list);
                         }
-                        // 带上结构化清单:原因弹窗可以直接一键开网页,不用再解析文字
-                        record.ManualModsDir = Path.Combine(gameDir, "mods");
-                        record.ManualMods = ManualModDownloads.ParseEntries(cfMissingFiles);
-                        throw new IOException(
-                            "整合包已安装，但需手动下载 " + cfMissingFiles.Count + " 个模组（作者禁止第三方 API 下载）。"
-                            + "清单已写到 " + missingPath + Environment.NewLine + list);
                     }
                     progress.Report(1.0);
                     Trace("modpack " + packVersionId + ": done");
