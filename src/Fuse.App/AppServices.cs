@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Windows;
@@ -576,8 +577,7 @@ public static class AppServices
                     var id = Path.GetFileName(dir);
                     if (!File.Exists(Path.Combine(dir, id + ".json"))) continue;
                     if (Fuse.Core.Versioning.InstanceLayout.IsIsolated(dir)) anyVersionIsolated = true;
-                    if (Fuse.Core.Versioning.InstanceLayout.IsIsolated(Path.Combine(instancesDir, id)))
-                        anyInstanceIsolated = true;
+                    if (HasInstanceContent(Path.Combine(instancesDir, id))) anyInstanceIsolated = true;
                 }
             }
         }
@@ -585,9 +585,34 @@ public static class AppServices
         {
         }
 
-        // versions 已经是实例、instances 却是空的 → 外部隔离布局
+        // versions 已经是实例、instances 却没有实际内容 → 外部隔离布局
         if (anyVersionIsolated && !anyInstanceIsolated) return false;
         return true;
+    }
+
+    /// <summary>
+    /// instances/&lt;id&gt; 里有没有真正的内容。空 mods 目录或单个 log4jConfig.xml
+    /// 不能算:外部目录被旧逻辑误启动时会留下这些空壳。
+    /// </summary>
+    private static bool HasInstanceContent(string dir)
+    {
+        try
+        {
+            if (!Directory.Exists(dir)) return false;
+            if (File.Exists(Path.Combine(dir, "options.txt")) ||
+                File.Exists(Path.Combine(dir, "servers.dat"))) return true;
+            foreach (var sub in new[] { "mods", "saves", "resourcepacks", "shaderpacks", "shaders" })
+            {
+                var path = Path.Combine(dir, sub);
+                if (Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any()) return true;
+            }
+            foreach (var sub in Directory.EnumerateDirectories(dir))
+                if (File.Exists(Path.Combine(sub, "Setup.ini"))) return true;
+        }
+        catch (Exception)
+        {
+        }
+        return false;
     }
 
     /// <summary>
@@ -602,9 +627,9 @@ public static class AppServices
         if (root.Equals(InstallDirectory, StringComparison.OrdinalIgnoreCase)) return managed;
 
         var versionDir = Path.Combine(root, "versions", versionId);
-        // 版本目录有 mods/saves/Setup.ini 隔离标记,而 instances/<id> 是空的:用版本目录
+        // 版本目录有 mods/saves/Setup.ini 隔离标记,而 instances/<id> 没有实际内容:用版本目录
         if (Fuse.Core.Versioning.InstanceLayout.IsIsolated(versionDir) &&
-            !Fuse.Core.Versioning.InstanceLayout.IsIsolated(managed))
+            !HasInstanceContent(managed))
             return versionDir;
 
         return IsManagedLayout(root)
