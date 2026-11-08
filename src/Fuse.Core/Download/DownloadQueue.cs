@@ -584,6 +584,17 @@ public sealed class DownloadQueue
                 manual.All(m => ManualModDownloads.IsPresent(manualDir, m)))
             {
                 Trace("modpack retry: manual mods already present in " + manualDir);
+                // 上次留的待办清单已经过时,一起清掉
+                try
+                {
+                    var marker = Path.Combine(
+                        Path.GetDirectoryName(manualDir.TrimEnd(Path.DirectorySeparatorChar)) ?? manualDir,
+                        "需手动下载的模组.txt");
+                    if (File.Exists(marker)) File.Delete(marker);
+                }
+                catch (IOException)
+                {
+                }
                 record.ManualMods = null;
                 record.ManualModsDir = null;
                 progress.Report(1.0);
