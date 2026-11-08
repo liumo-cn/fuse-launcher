@@ -12,6 +12,7 @@ public class VersionsPanel : UserControl
 {
     private readonly StackPanel _list = new();
     private readonly FolderListPanel _folders = new();
+    private bool _skipFirstMouseEnter = true;
 
     public VersionsPanel()
     {
@@ -24,8 +25,18 @@ public class VersionsPanel : UserControl
         };
         Content = scroll;
         _folders.Changed += () => Dispatcher.BeginInvoke(new Action(Refresh));
-        // 重进面板时刷新(改名后别名立即可见)
-        MouseEnter += (_, _) => Refresh();
+        // 重进面板时刷新(改名后别名立即可见)。
+        // 但面板刚 Show 出来时鼠标进入会立刻再扫一遍磁盘,正好撞上 300ms 出场动画,
+        // 造成"动画中卡一下";构造时已经刷过一次,第一次 MouseEnter 直接跳过。
+        MouseEnter += (_, _) =>
+        {
+            if (_skipFirstMouseEnter)
+            {
+                _skipFirstMouseEnter = false;
+                return;
+            }
+            Refresh();
+        };
         Refresh();
     }
 
