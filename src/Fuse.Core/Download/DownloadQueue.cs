@@ -590,6 +590,7 @@ public sealed class DownloadQueue
                 Trace("modpack " + packVersionId + ": source=" + (hasLocalPack ? "local file" : meta.MrpackUrl));
                 try
                 {
+                    IReadOnlyList<string> cfMissingFiles = Array.Empty<string>();
                     var mrpackPath = Path.Combine(tempRoot, "pack.mrpack");
                     if (hasLocalPack)
                     {
@@ -611,9 +612,12 @@ public sealed class DownloadQueue
                             new ChunkedDownloadOptions { Parallelism = 4 },
                             ToScaled(progress, 0.00, 0.02), cancellation).ConfigureAwait(false);
 
-                        await Installer.ModpackInstaller.BuildCurseForgeMrpackAsync(
+                        var missingFiles = await Installer.ModpackInstaller.BuildCurseForgeMrpackAsync(
                             _http, meta.CurseForgeProjectId, cfZip, mrpackPath,
                             ToScaled(progress, 0.02, 0.03), cancellation, Trace).ConfigureAwait(false);
+                        if (missingFiles.Count > 0)
+                            Trace("modpack " + packVersionId + ": " + missingFiles.Count + " files not downloadable via API");
+                        cfMissingFiles = missingFiles;
                         Trace("modpack " + packVersionId + ": curseforge manifest converted");
                     }
                     else
@@ -735,6 +739,11 @@ public sealed class DownloadQueue
                     // 7. overrides(92~96%;index 清单路径不被覆盖)
                     Installer.ModpackInstaller.ExtractOverrides(
                         tempRoot, gameDir, Installer.ModpackInstaller.ReservedPaths(index.Files), cancellation);
+                    if (cfMissingFiles.Count > 0)
+                        throw new IOException(
+                            "整合包已安装到 " + gameDir + "，但以下必需模组作者禁止第三方 API 下载，请手动下载后放进 mods：" +
+                            string.Join("；", cfMissingFiles.Take(10)) +
+                            (cfMissingFiles.Count > 10 ? " 等 " + cfMissingFiles.Count + " 个" : ""));
                     progress.Report(1.0);
                     Trace("modpack " + packVersionId + ": done");
                 }

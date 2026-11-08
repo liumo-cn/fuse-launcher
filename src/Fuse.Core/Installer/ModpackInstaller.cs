@@ -127,7 +127,7 @@ public static class ModpackInstaller
     /// 逐个 fileID 查 API 拿 downloadUrl,再写 modrinth.index.json。
     /// 解析过程带 CancellationToken,放回队列里执行,暂停/进度才有效。
     /// </summary>
-    public static async Task BuildCurseForgeMrpackAsync(
+    public static async Task<IReadOnlyList<string>> BuildCurseForgeMrpackAsync(
         HttpClient http, int projectId, string packZipPath, string outMrpackPath,
         IProgress<double>? progress, CancellationToken ct, Action<string>? log = null)
     {
@@ -217,20 +217,17 @@ public static class ModpackInstaller
             }
             else if (required)
             {
-                // 必需文件解析不到(限流/作者禁第三方分发):宁可整包失败,
-                // 也不要装出一个缺前置的半成品
-                missing.Add(pid + "/" + fid);
+                // 必需文件拿不到 URL(作者禁止第三方 API 下载):保留文件名,
+                // 先装其余文件,最后让调用方明确提示手动补哪几个 jar。
+                missing.Add(meta != null && !string.IsNullOrWhiteSpace(meta.FileName)
+                    ? meta.FileName + " (" + pid + "/" + fid + ")"
+                    : pid + "/" + fid);
             }
 
             done++;
             if (done % 5 == 0 || done == files.Count)
                 progress?.Report(0.9 * done / total);
         }
-
-        if (missing.Count > 0)
-            throw new IOException(
-                $"CurseForge 有 {missing.Count} 个必需文件解析失败(可能触发限流或作者禁用第三方分发):" +
-                string.Join(", ", missing.Take(5)));
 
         var deps = new JObject { ["minecraft"] = gameVersion };
         if (!string.IsNullOrEmpty(depKey) && !string.IsNullOrEmpty(loaderVersion))
@@ -262,5 +259,6 @@ public static class ModpackInstaller
             await es.CopyToAsync(ds, 81920, ct).ConfigureAwait(false);
         }
         progress?.Report(1.0);
+        return missing;
     }
 }
