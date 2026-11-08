@@ -1010,6 +1010,36 @@ public class DownloadPanel : UserControl
         DownloadFocus.Register(task.TaskId, _panelKind);
     }
 
+    // CurseForge 数字 ID 的项目页能开,但文件页必须带 slug;查过一次就缓存
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, string> CfSiteBaseCache = new();
+
+    /// <summary>把 项目/文件 ID 变成 CurseForge 文件页;失败退回项目主页。</summary>
+    private static async Task<string> ResolveCurseForgePageAsync(ManualModDownload mod)
+    {
+        var direct = mod.PageUrl;
+        if (!string.IsNullOrEmpty(direct)) return direct;
+        if (mod.ProjectId <= 0) return "";
+        if (CfSiteBaseCache.TryGetValue(mod.ProjectId, out var cached) && !string.IsNullOrEmpty(cached))
+            return cached + "/files/" + mod.FileId;
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            var project = await CurseForgeSource.GetProjectAsync(mod.ProjectId, cts.Token).ConfigureAwait(false);
+            var baseUrl = ManualModDownload.BuildPageUrl(
+                project.WebsiteUrl, project.Slug, project.ClassId, 0).TrimEnd('/');
+            if (!string.IsNullOrEmpty(baseUrl))
+            {
+                CfSiteBaseCache[mod.ProjectId] = baseUrl;
+                return baseUrl + "/files/" + mod.FileId;
+            }
+        }
+        catch
+        {
+        }
+        // 搜不到的项目(隐藏/未上架)直接开项目主页,至少能进 Files 页
+        return mod.ProjectUrl;
+    }
+
     /// <summary>完整失败原因(任务行只放一句摘要)。</summary>
     private void ShowTaskError(Fuse.Core.Download.DownloadTaskRecord task)
     {
@@ -1047,21 +1077,34 @@ public class DownloadPanel : UserControl
         var buttons = new List<UIElement>();
         if (manualMods.Count > 0)
         {
-            buttons.Add(DialogKit.Primary("打开下载页", () =>
+            Button? openButton = null;
+            openButton = DialogKit.Primary("打开下载页", async () =>
             {
+                // /projects/<id>/files/<fid> 在 CurseForge 是 404,必须用 slug 拼直达页
+                openButton!.IsEnabled = false;
                 var opened = 0;
-                foreach (var mod in manualMods)
+                string[] urls;
+                try
                 {
-                    if (string.IsNullOrEmpty(mod.PageUrl)) continue;
+                    urls = await Task.WhenAll(manualMods.Select(ResolveCurseForgePageAsync));
+                }
+                catch
+                {
+                    urls = manualMods.Select(m => m.ProjectUrl).ToArray();
+                }
+                foreach (var url in urls)
+                {
+                    if (string.IsNullOrEmpty(url)) continue;
                     try
                     {
-                        Process.Start(new ProcessStartInfo(mod.PageUrl) { UseShellExecute = true });
+                        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
                         opened++;
                     }
                     catch
                     {
                     }
                 }
+                openButton!.IsEnabled = true;
                 var folderOpened = false;
                 if (!string.IsNullOrEmpty(modsDir))
                 {
@@ -1082,7 +1125,8 @@ public class DownloadPanel : UserControl
                     Toast("已打开 " + opened + " 个下载页和 mods 文件夹");
                 else
                     Toast("已打开 " + opened + " 个下载页");
-            }));
+            });
+            buttons.Add(openButton);
             buttons.Add(DialogKit.Secondary("复制原因", () => { Copy(); Toast("已复制失败原因"); }));
         }
         else

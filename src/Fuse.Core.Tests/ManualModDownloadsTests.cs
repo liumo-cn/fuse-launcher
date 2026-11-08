@@ -60,10 +60,45 @@ public class ManualModDownloadsTests
     }
 
     [Fact]
-    public void PageUrl_UsesProjectAndFile()
+    public void PageUrl_UsesSlugBecauseNumericFileUrlIs404()
     {
-        var mod = new ManualModDownload { ProjectId = 348025, FileId = 4436467 };
-        Assert.Equal("https://www.curseforge.com/projects/348025/files/4436467", mod.PageUrl);
+        var mod = new ManualModDownload
+        {
+            ProjectId = 348025,
+            FileId = 4436467,
+            Slug = "scape-and-run-parasites",
+            ClassId = 6,
+        };
+        Assert.Equal(
+            "https://www.curseforge.com/minecraft/mc-mods/scape-and-run-parasites/files/4436467",
+            mod.PageUrl);
+
+        var pack = new ManualModDownload
+        {
+            ProjectId = 1,
+            FileId = 2,
+            Slug = "rlcraft",
+            ClassId = 4471,
+        };
+        Assert.Equal("https://www.curseforge.com/minecraft/modpacks/rlcraft/files/2", pack.PageUrl);
+    }
+
+    [Fact]
+    public void PageUrl_PrefersWebsiteUrlAndFallsBackToProjectPage()
+    {
+        var mod = new ManualModDownload
+        {
+            ProjectId = 237989,
+            FileId = 2782568,
+            WebsiteUrl = "https://www.curseforge.com/minecraft/mc-mods/realistic-terrain-generation/",
+        };
+        Assert.Equal(
+            "https://www.curseforge.com/minecraft/mc-mods/realistic-terrain-generation/files/2782568",
+            mod.PageUrl);
+        Assert.Equal("https://www.curseforge.com/projects/237989", mod.ProjectUrl);
+
+        // 老任务解析出来只有 ID,slug 要靠接口补;补不到时 PageUrl 为空,界面走项目主页
+        Assert.Equal("", new ManualModDownload { ProjectId = 1, FileId = 2 }.PageUrl);
     }
 
     [Fact]

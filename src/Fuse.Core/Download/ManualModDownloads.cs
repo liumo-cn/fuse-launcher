@@ -14,10 +14,39 @@ public sealed class ManualModDownload
     public string Name { get; set; } = "";
     public int ProjectId { get; set; }
     public int FileId { get; set; }
+    /// <summary>从 API 补到的项目 slug / 官网地址;老任务没有,点按钮时再查</summary>
+    public string Slug { get; set; } = "";
+    public int ClassId { get; set; }
+    public string WebsiteUrl { get; set; } = "";
 
-    public string PageUrl => ProjectId > 0 && FileId > 0
-        ? "https://www.curseforge.com/projects/" + ProjectId + "/files/" + FileId
+    /// <summary>直达文件页。CurseForge 的 /projects/&lt;id&gt;/files/&lt;fid&gt; 是 404,必须用 slug。</summary>
+    public string PageUrl => BuildPageUrl(WebsiteUrl, Slug, ClassId, FileId);
+
+    /// <summary>兜底:项目主页(这个地址认数字 ID,能打开)。</summary>
+    public string ProjectUrl => ProjectId > 0
+        ? "https://www.curseforge.com/projects/" + ProjectId
         : "";
+
+    public static string BuildPageUrl(string? websiteUrl, string? slug, int classId, int fileId)
+    {
+        var baseUrl = websiteUrl;
+        if (string.IsNullOrEmpty(baseUrl) && !string.IsNullOrEmpty(slug))
+            baseUrl = "https://www.curseforge.com/minecraft/" + SectionFor(classId) + "/" + slug;
+        if (string.IsNullOrEmpty(baseUrl)) return "";
+        baseUrl = baseUrl.TrimEnd('/');
+        return fileId > 0 ? baseUrl + "/files/" + fileId : baseUrl;
+    }
+
+    private static string SectionFor(int classId) => classId switch
+    {
+        4471 => "modpacks",
+        12 => "texture-packs",
+        6552 => "shaders",
+        17 => "worlds",
+        4546 => "customization",
+        5 => "bukkit-plugins",
+        _ => "mc-mods",
+    };
 }
 
 /// <summary>

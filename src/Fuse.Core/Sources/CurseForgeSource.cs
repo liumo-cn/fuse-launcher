@@ -14,7 +14,8 @@ public sealed record CfHit(
 /// <summary>CurseForge 项目详情。</summary>
 public sealed record CfProject(
     int Id, string Slug, string Name, string Summary,
-    string? DescriptionHtml, List<string> Categories);
+    string? DescriptionHtml, List<string> Categories,
+    int ClassId = 6, string? WebsiteUrl = null);
 
 /// <summary>CurseForge 文件条目。DownloadUrl 为空 = 作者未授权第三方分发。</summary>
 public sealed record CfFile(
@@ -150,13 +151,16 @@ public static class CurseForgeSource
     {
         var json = await GetJsonAsync(ApiBase + "/mods/" + projectId, ct).ConfigureAwait(false);
         var m = json["data"] ?? throw new InvalidOperationException("CurseForge 未返回项目数据");
+        var links = m["links"] as JObject;
         return new CfProject(
             m.Value<int?>("id") ?? projectId,
-            (m["links"] as JObject)?.Value<string>("slug") ?? "",
+            links?.Value<string>("slug") ?? m.Value<string>("slug") ?? "",
             m.Value<string>("name") ?? "",
             m.Value<string>("summary") ?? "",
             m.Value<string>("description"),
-            new List<string>());
+            new List<string>(),
+            m.Value<int?>("classId") ?? 6,
+            links?.Value<string>("websiteUrl"));
     }
 
     public static async Task<List<CfFile>> GetFilesAsync(
