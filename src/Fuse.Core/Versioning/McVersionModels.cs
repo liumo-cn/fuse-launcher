@@ -150,7 +150,10 @@ public sealed class McLibrary
         // 只有 maven 坐标、没有 downloads 节点的库(Fabric meta 的 launcherMeta 就是这样):
         // 按坐标合成 artifact 路径,下载地址取 url 字段(缺省按 Fabric maven)。
         // 不补的话 BuildClasspath 会把它整个跳过,启动直接 ClassNotFoundException(KnotClient)。
-        if (lib.Artifact == null && !string.IsNullOrEmpty(lib.Name) && lib.Name.Contains(":"))
+        // 但 natives-only 的库(如 jinput-platform)只有 classifiers,没有主 jar;
+        // 按坐标合成会造出一个不存在的 jinput-platform-2.0.5.jar,体检永远报缺 1 个库。
+        if (lib.Artifact == null && lib.Classifiers == null && o["downloads"] == null
+            && !string.IsNullOrEmpty(lib.Name) && lib.Name.Contains(":"))
         {
             var rel = MavenRelativePath(lib.Name);
             if (rel != null)
