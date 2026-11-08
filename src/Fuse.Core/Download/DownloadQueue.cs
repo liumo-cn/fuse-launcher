@@ -613,7 +613,7 @@ public sealed class DownloadQueue
 
                         await Installer.ModpackInstaller.BuildCurseForgeMrpackAsync(
                             _http, meta.CurseForgeProjectId, cfZip, mrpackPath,
-                            ToScaled(progress, 0.02, 0.03), cancellation).ConfigureAwait(false);
+                            ToScaled(progress, 0.02, 0.03), cancellation, Trace).ConfigureAwait(false);
                         Trace("modpack " + packVersionId + ": curseforge manifest converted");
                     }
                     else

@@ -129,7 +129,7 @@ public static class ModpackInstaller
     /// </summary>
     public static async Task BuildCurseForgeMrpackAsync(
         HttpClient http, int projectId, string packZipPath, string outMrpackPath,
-        IProgress<double>? progress, CancellationToken ct)
+        IProgress<double>? progress, CancellationToken ct, Action<string>? log = null)
     {
         using var source = ZipFile.OpenRead(packZipPath);
         var manifestEntry = source.GetEntry("manifest.json")
@@ -175,6 +175,33 @@ public static class ModpackInstaller
                     {
                         if (attempt < 2) await Task.Delay(1000 * (attempt + 1), ct).ConfigureAwait(false);
                     }
+                }
+            }
+
+            if (meta == null || string.IsNullOrWhiteSpace(meta.DownloadUrl))
+            {
+                // 官方 launcher 也会遇到旧整合包引用已下架文件。先在同项目里找同一个
+                // fileID(有些源单文件接口 404 但列表里还在),找不到就退到最新适配版本。
+                try
+                {
+                    var candidates = await CurseForgeSource.GetFilesAsync(
+                        pid, gameVersion, loaderKey, ct).ConfigureAwait(false);
+                    var fallback = candidates.FirstOrDefault(x => x.Id == fid && !string.IsNullOrWhiteSpace(x.DownloadUrl))
+                                   ?? candidates.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.DownloadUrl));
+                    if (fallback != null)
+                    {
+                        log?.Invoke("file " + pid + "/" + fid + " unavailable, using "
+                                    + fallback.Id + " " + fallback.FileName);
+                        meta = fallback;
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    log?.Invoke("file " + pid + "/" + fid + " fallback failed: " + ex.Message);
                 }
             }
 
