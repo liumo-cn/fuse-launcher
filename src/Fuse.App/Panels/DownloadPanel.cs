@@ -214,6 +214,12 @@ public class DownloadPanel : UserControl
             case DownloadTaskStatus.Completed: return "已完成";
             case DownloadTaskStatus.Failed:
                 var msg = t.ErrorMessage ?? "失败";
+                var manual = System.Text.RegularExpressions.Regex.Match(
+                    msg, @"需手动下载\s*(\d+)\s*个模组");
+                if (manual.Success)
+                    return "失败：需手动下载 " + manual.Groups[1].Value + " 个模组（点「原因」）";
+                if (msg.IndexOf("手动下载后放进 mods", StringComparison.Ordinal) >= 0)
+                    return "失败：有模组需手动下载（点「原因」）";
                 if (msg.Length > 70) msg = msg.Substring(0, 70) + "…";
                 return "失败:" + msg;
             default: return t.Status.ToString();
@@ -394,6 +400,11 @@ public class DownloadPanel : UserControl
         grid.Children.Add(pct);
 
         Button? action = null;
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
         if (task.Status != DownloadTaskStatus.Completed)
         {
             var (label, handler) = task.Status switch
@@ -423,9 +434,28 @@ public class DownloadPanel : UserControl
                     handler();
                     Rebuild();
                 };
-                Grid.SetColumn(action, 2);
-                grid.Children.Add(action);
+                actions.Children.Add(action);
             }
+        }
+
+        if (task.Status == DownloadTaskStatus.Failed && !string.IsNullOrWhiteSpace(task.ErrorMessage))
+        {
+            var detail = new Button
+            {
+                Content = "原因",
+                Style = (Style)Application.Current.Resources["ChipButton"],
+                Padding = new Thickness(10, 4, 10, 4),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            System.Windows.Automation.AutomationProperties.SetName(detail, "查看失败原因 " + task.Name);
+            detail.Click += (_, _) => ShowTaskError(task);
+            actions.Children.Add(detail);
+        }
+
+        if (actions.Children.Count > 0)
+        {
+            Grid.SetColumn(actions, 2);
+            grid.Children.Add(actions);
         }
 
         var remove = new Button
@@ -977,6 +1007,47 @@ public class DownloadPanel : UserControl
             Meta = metaJson,
         });
         DownloadFocus.Register(task.TaskId, _panelKind);
+    }
+
+    /// <summary>完整失败原因(任务行只放一句摘要)。</summary>
+    private void ShowTaskError(Fuse.Core.Download.DownloadTaskRecord task)
+    {
+        var stack = new StackPanel();
+        var head = DialogKit.Title("下载失败原因");
+        stack.Children.Add(head);
+        var box = new TextBox
+        {
+            Text = task.ErrorMessage ?? "",
+            IsReadOnly = true,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = true,
+            MaxHeight = 360,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Foreground = DialogKit.Res("TextSecondaryBrush"),
+            FontSize = 11.5,
+            Margin = new Thickness(0, 10, 0, 0),
+            Padding = new Thickness(0),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(box, "失败原因");
+        stack.Children.Add(box);
+
+        Window? window = null;
+        stack.Children.Add(DialogKit.Buttons(
+            DialogKit.Primary("复制原因", () =>
+            {
+                ClipboardHelper.TrySetText(task.ErrorMessage ?? "");
+                Toast("已复制失败原因");
+            }),
+            DialogKit.Secondary("关闭", () => window!.DialogResult = true)));
+        window = new Window { Width = 460, Content = DialogKit.Card(stack) };
+        DialogKit.ApplyWindow(window, 460);
+        window.Owner = Window.GetWindow(this) ?? AppServices.Widget;
+        DialogKit.WireDrag(window, head);
+        DialogKit.WireKeys(window, () => window.DialogResult = true);
+        window.ShowDialog();
     }
 
     private void Rebuild()

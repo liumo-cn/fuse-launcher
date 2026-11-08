@@ -740,10 +740,22 @@ public sealed class DownloadQueue
                     Installer.ModpackInstaller.ExtractOverrides(
                         tempRoot, gameDir, Installer.ModpackInstaller.ReservedPaths(index.Files), cancellation);
                     if (cfMissingFiles.Count > 0)
+                    {
+                        var list = string.Join(Environment.NewLine, cfMissingFiles.Select(x => "· " + x));
+                        var missingPath = Path.Combine(gameDir, "需手动下载的模组.txt");
+                        try
+                        {
+                            File.WriteAllText(missingPath,
+                                "以下模组作者禁止第三方 API 下载，请从 CurseForge 网页下载后放进本目录的 mods 文件夹："
+                                + Environment.NewLine + list + Environment.NewLine);
+                        }
+                        catch (IOException)
+                        {
+                        }
                         throw new IOException(
-                            "整合包已安装到 " + gameDir + "，但以下必需模组作者禁止第三方 API 下载，请手动下载后放进 mods：" +
-                            string.Join("；", cfMissingFiles.Take(10)) +
-                            (cfMissingFiles.Count > 10 ? " 等 " + cfMissingFiles.Count + " 个" : ""));
+                            "整合包已安装，但需手动下载 " + cfMissingFiles.Count + " 个模组（作者禁止第三方 API 下载）。"
+                            + "清单已写到 " + missingPath + Environment.NewLine + list);
+                    }
                     progress.Report(1.0);
                     Trace("modpack " + packVersionId + ": done");
                 }
