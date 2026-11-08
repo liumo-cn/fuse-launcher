@@ -43,11 +43,6 @@
   <ItemGroup>
     <Resource Include="Assets\bolt.png" />
     <Resource Include="Assets\fuse.ico" />
-    <Resource Include="Assets\login.png" />
-    <Resource Include="Assets\download.png" />
-    <Resource Include="Assets\settings.png" />
-    <Resource Include="Assets\versions.png" />
-    <Resource Include="Assets\more.png" />
   </ItemGroup>
 
 </Project>

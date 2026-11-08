@@ -527,18 +527,24 @@ public partial class WidgetWindow : Window
                     _ => "版本",
                 };
                 System.Windows.Automation.AutomationProperties.SetName(petal, label);
-                var source = IconGlyph.Get(name!);
-                if (source == null) continue;    // 取不到就保留原标题
-                var icon = new Image
+                var geometry = PetalIcons.Get(name!);
+                if (geometry == null) continue;    // 取不到就保留原标题
+                var icon = new Path
                 {
-                    Source = source,
+                    Data = geometry,
+                    Stroke = Brushes.White,
+                    StrokeThickness = 1.2,
+                    StrokeStartLineCap = PenLineCap.Round,
+                    StrokeEndLineCap = PenLineCap.Round,
+                    StrokeLineJoin = PenLineJoin.Round,
+                    Fill = null,
                     Width = 40,
                     Height = 40,
                     Stretch = Stretch.Uniform,
                     IsHitTestVisible = false,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
                 };
-                // 256px 位图缩到 30px:用高质量缩放,避免线条边缘出现台阶
-                RenderOptions.SetBitmapScalingMode(icon, BitmapScalingMode.HighQuality);
                 petal.Content = icon;
             }
             Boot("petal icons ready");

@@ -50,6 +50,9 @@ internal static class PanelPopIn
 
         var scale = new ScaleTransform(FromScale, FromScale);
         root.RenderTransform = scale;
+        // 缩放期间把整页缓存成位图:文字不会逐帧重新光栅化,避免字体边缘"抽动";
+        // 动画结束立刻摘掉,恢复原生清晰渲染。
+        root.CacheMode = new BitmapCache { RenderAtScale = 1 };
 
         var grow = new DoubleAnimation(FromScale, 1, GrowMs)
         {
@@ -59,6 +62,7 @@ internal static class PanelPopIn
         {
             // 动画结束摘掉变换,后续拖动面板时不再带着缩放
             root.RenderTransform = null;
+            root.CacheMode = null;
             root.BeginAnimation(UIElement.OpacityProperty, null);
         };
         scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
