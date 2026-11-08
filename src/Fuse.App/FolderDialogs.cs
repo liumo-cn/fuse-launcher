@@ -27,6 +27,16 @@ internal static class DialogKit
         w.Width = width;
         w.WindowStartupLocation = WindowStartupLocation.CenterOwner;
         w.Topmost = true;
+        // 面板贴屏幕右边时 CenterOwner 会把弹窗推到屏幕外 内容直接被裁掉
+        // 显示后按工作区钳一下 保证整块可见
+        w.Loaded += (_, _) =>
+        {
+            var area = SystemParameters.WorkArea;
+            if (w.ActualWidth > 0)
+                w.Left = Math.Max(area.Left + 8, Math.Min(area.Right - w.ActualWidth - 8, w.Left));
+            if (w.ActualHeight > 0)
+                w.Top = Math.Max(area.Top + 8, Math.Min(area.Bottom - w.ActualHeight - 8, w.Top));
+        };
     }
 
     public static Border Card(UIElement content) => new Border
