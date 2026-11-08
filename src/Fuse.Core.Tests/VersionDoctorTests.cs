@@ -70,6 +70,21 @@ public class VersionDoctorTests : IDisposable
     }
 
     [Fact]
+    public void DetectsLegacyForgeWithoutDoubleGameVersion()
+    {
+        // 1.12.2 的 Forge 坐标带 MC 前缀;补全时再拼一次会变成
+        // 1.12.2-1.12.2-14.23.5.2860/...-installer.jar → 404
+        WriteVersion("1.12.2", "{\"id\":\"1.12.2\",\"type\":\"release\",\"libraries\":[]}");
+        WriteVersion("1.12.2-forge-14.23.5.2860",
+            "{\"id\":\"1.12.2-forge-14.23.5.2860\",\"inheritsFrom\":\"1.12.2\",\"type\":\"release\"," +
+            "\"libraries\":[{\"name\":\"net.minecraftforge:forge:1.12.2-14.23.5.2860\"}]}");
+        var audit = AuditOne("1.12.2-forge-14.23.5.2860");
+        Assert.Equal("forge", audit.Kind);
+        Assert.Equal("1.12.2", audit.GameVersion);
+        Assert.Equal("14.23.5.2860", audit.LoaderVersion);
+    }
+
+    [Fact]
     public void DetectsNeoForge()
     {
         WriteVersion("1.20.4", "{\"id\":\"1.20.4\",\"type\":\"release\",\"libraries\":[]}");

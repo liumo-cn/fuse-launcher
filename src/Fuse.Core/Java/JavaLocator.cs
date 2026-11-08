@@ -96,6 +96,11 @@ public static class JavaLocator
     {
         var exact = runtimes.FirstOrDefault(r => r.MajorVersion == requiredMajor);
         if (exact != null) return exact;
+
+        // 1.16 及更早用的是老启动链,高版本 Java 会 ClassCastException
+        // (1.12.2 的 LaunchWrapper 在 Java 21 上直接挂),不能拿高版本顶替。
+        if (requiredMajor < 17) return null;
+
         return runtimes
             .Where(r => r.MajorVersion > requiredMajor)
             .OrderBy(r => r.MajorVersion)

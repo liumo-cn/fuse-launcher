@@ -556,6 +556,8 @@ public class SettingsPanel : UserControl
             {
                 var key = "vanilla:" + gameVersion;
                 if (!queuedKeys.Add(key)) return;
+                var name = $"{gameVersion}(补全)";
+                if (HasActiveRepairTask(name)) return;
                 var entry = manifest.FirstOrDefault(v => string.Equals(v.Id, gameVersion, StringComparison.OrdinalIgnoreCase));
                 if (entry == null) return;
                 var vanillaMeta = Newtonsoft.Json.JsonConvert.SerializeObject(new
@@ -568,7 +570,7 @@ public class SettingsPanel : UserControl
                 });
                 AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
                 {
-                    Name = $"{gameVersion}(补全)",
+                    Name = name,
                     Kind = "vanilla-install",
                     SourceUrl = entry.Url,
                     ExpectedHash = entry.Sha1,
@@ -581,6 +583,8 @@ public class SettingsPanel : UserControl
             {
                 var key = kind + ":" + gameVersion + ":" + loaderVersion;
                 if (!queuedKeys.Add(key)) return;
+                var name = $"{gameVersion}-{kind}-{loaderVersion}(补全)";
+                if (HasActiveRepairTask(name)) return;
                 var meta = Newtonsoft.Json.JsonConvert.SerializeObject(new
                 {
                     gameVersion,
@@ -592,7 +596,7 @@ public class SettingsPanel : UserControl
                 });
                 AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
                 {
-                    Name = $"{gameVersion}-{kind}-{loaderVersion}(补全)",
+                    Name = name,
                     Kind = kind + "-install",
                     Meta = meta,
                 });
@@ -650,6 +654,17 @@ public class SettingsPanel : UserControl
             trigger.Tag = null;
             trigger.IsEnabled = true;
         }
+    }
+
+    /// <summary>同名补全任务还在排队/下载/暂停时不再入队,连点不会堆出重复任务。</summary>
+    private static bool HasActiveRepairTask(string name)
+    {
+        var tasks = AppServices.Queue?.GetTasks();
+        if (tasks == null) return false;
+        return tasks.Any(t => string.Equals(t.Name, name, StringComparison.Ordinal) &&
+            (t.Status == Fuse.Core.Download.DownloadTaskStatus.Queued ||
+             t.Status == Fuse.Core.Download.DownloadTaskStatus.Downloading ||
+             t.Status == Fuse.Core.Download.DownloadTaskStatus.Paused));
     }
 
     private StackPanel? _javaOptions;

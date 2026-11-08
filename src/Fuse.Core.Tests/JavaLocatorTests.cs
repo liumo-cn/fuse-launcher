@@ -14,6 +14,42 @@ public class JavaLocatorTests
         return root;
     }
 
+    private static JavaRuntime Rt(int major) => new()
+    {
+        Home = "C:\\Java\\" + major,
+        VersionString = major.ToString(),
+        MajorVersion = major,
+        Source = "test",
+    };
+
+    [Fact]
+    public void Pick_ExactMajorFirst()
+    {
+        var all = new System.Collections.Generic.List<JavaRuntime> { Rt(8), Rt(17), Rt(21) };
+        Assert.Equal(8, JavaLocator.Pick(all, 8)!.MajorVersion);
+        Assert.Equal(17, JavaLocator.Pick(all, 17)!.MajorVersion);
+    }
+
+    [Fact]
+    public void Pick_DoesNotUseNewerJavaForLegacy()
+    {
+        // 1.12.2 的 LaunchWrapper 在 Java 21 上 ClassCastException,必须去下 Java 8
+        var onlyNew = new System.Collections.Generic.List<JavaRuntime> { Rt(17), Rt(21) };
+        Assert.Null(JavaLocator.Pick(onlyNew, 8));
+        Assert.Null(JavaLocator.Pick(onlyNew, 16));
+    }
+
+    [Fact]
+    public void Pick_AllowsNewerJavaForModernVersions()
+    {
+        var onlyNew = new System.Collections.Generic.List<JavaRuntime> { Rt(17), Rt(21) };
+        Assert.Equal(17, JavaLocator.Pick(onlyNew, 17)!.MajorVersion);
+        Assert.Equal(21, JavaLocator.Pick(onlyNew, 18)!.MajorVersion);
+
+        var newer = new System.Collections.Generic.List<JavaRuntime> { Rt(19), Rt(21) };
+        Assert.Equal(19, JavaLocator.Pick(newer, 17)!.MajorVersion);
+    }
+
     [Fact]
     public void HasServerJvm_RequiresServerJvmDll()
     {

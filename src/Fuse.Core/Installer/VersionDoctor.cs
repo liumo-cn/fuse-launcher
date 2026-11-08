@@ -111,10 +111,10 @@ public static class VersionDoctor
             }
         }
 
-        var loader = DetectLoader(version, versionId);
         var gameVersion = RootGameVersion(version, versionsRoot);
         if (string.IsNullOrEmpty(gameVersion))
             gameVersion = InferFromVersionId(versionId).GameVersion;
+        var loader = DetectLoader(version, versionId, gameVersion);
         return new VersionAudit
         {
             VersionId = versionId,
@@ -131,7 +131,7 @@ public static class VersionDoctor
     /// 从合并后的 libraries 识别加载器与版本。Forge/NeoForge 的坐标在不同年代不一样
     /// (forge / fmlloader / neoforge / fancymodloader),识别不出时退回按 canonical id 解析。
     /// </summary>
-    private static LoaderInfo DetectLoader(McVersion version, string versionId)
+    private static LoaderInfo DetectLoader(McVersion version, string versionId, string gameVersion)
     {
         var libs = version.Libraries;
         const string fabricPrefix = "net.fabricmc:fabric-loader:";
@@ -148,7 +148,16 @@ public static class VersionDoctor
         var forge = libs.FirstOrDefault(l => l.Name != null &&
             l.Name.StartsWith("net.minecraftforge:forge:", StringComparison.OrdinalIgnoreCase));
         if (forge != null)
-            return new LoaderInfo("forge", AfterLastColon(forge.Name));
+        {
+            // 1.12.2 这种老 Forge 的坐标是 1.12.2-14.23.5.2860,
+            // 拿整串去拼 installer 路径会变成 1.12.2-1.12.2-… → 404
+            var raw = AfterLastColon(forge.Name);
+            var prefix = gameVersion + "-";
+            if (!string.IsNullOrEmpty(gameVersion) &&
+                raw.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                raw = raw.Substring(prefix.Length);
+            return new LoaderInfo("forge", raw);
+        }
 
         // 现代 Forge 没有 net.minecraftforge:forge 主条目:fmlloader 的版本是 "1.20.1-47.4.10"
         var fml = libs.FirstOrDefault(l => l.Name != null &&
