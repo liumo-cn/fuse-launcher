@@ -148,6 +148,7 @@ public static class ModpackInstaller
 
         var files = (manifest["files"] as JArray) ?? new JArray();
         var indexFiles = new JArray();
+        var missing = new List<string>();
         var total = Math.Max(1, files.Count);
         var done = 0;
         foreach (var f in files.OfType<JObject>())
@@ -155,36 +156,54 @@ public static class ModpackInstaller
             ct.ThrowIfCancellationRequested();
             var pid = f.Value<int?>("projectID") ?? 0;
             var fid = f.Value<int?>("fileID") ?? 0;
+            var required = f.Value<bool?>("required") ?? true;
+            CfFile? meta = null;
             if (pid > 0 && fid > 0)
             {
-                try
+                for (var attempt = 0; attempt < 3 && meta == null; attempt++)
                 {
-                    var meta = await CurseForgeSource.GetFileAsync(pid, fid, ct, skipRateLimit: true)
-                        .ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(meta.DownloadUrl))
+                    try
                     {
-                        indexFiles.Add(new JObject
-                        {
-                            ["path"] = "mods/" + meta.FileName,
-                            ["hashes"] = new JObject { ["sha1"] = meta.Sha1 ?? "" },
-                            ["downloads"] = new JArray(meta.DownloadUrl!),
-                            ["fileSize"] = meta.FileLength,
-                        });
+                        meta = await CurseForgeSource.GetFileAsync(pid, fid, ct, skipRateLimit: true)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception)
+                    {
+                        if (attempt < 2) await Task.Delay(1000 * (attempt + 1), ct).ConfigureAwait(false);
                     }
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception)
-                {
-                    // 单个文件解析失败不阻断整包
-                }
             }
+
+            if (meta != null && !string.IsNullOrWhiteSpace(meta.DownloadUrl))
+            {
+                indexFiles.Add(new JObject
+                {
+                    ["path"] = "mods/" + meta.FileName,
+                    ["hashes"] = new JObject { ["sha1"] = meta.Sha1 ?? "" },
+                    ["downloads"] = new JArray(meta.DownloadUrl!),
+                    ["fileSize"] = meta.FileLength,
+                });
+            }
+            else if (required)
+            {
+                // 必需文件解析不到(限流/作者禁第三方分发):宁可整包失败,
+                // 也不要装出一个缺前置的半成品
+                missing.Add(pid + "/" + fid);
+            }
+
             done++;
             if (done % 5 == 0 || done == files.Count)
                 progress?.Report(0.9 * done / total);
         }
+
+        if (missing.Count > 0)
+            throw new IOException(
+                $"CurseForge 有 {missing.Count} 个必需文件解析失败(可能触发限流或作者禁用第三方分发):" +
+                string.Join(", ", missing.Take(5)));
 
         var deps = new JObject { ["minecraft"] = gameVersion };
         if (!string.IsNullOrEmpty(depKey) && !string.IsNullOrEmpty(loaderVersion))

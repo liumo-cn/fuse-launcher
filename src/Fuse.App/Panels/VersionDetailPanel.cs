@@ -4554,21 +4554,29 @@ public class VersionDetailPanel : UserControl
 
         if (state.Kind == "mod")
         {
-            var deps = await CurseForgeSource.GetDependenciesAsync(projectId, main.Id, CancellationToken.None)
-                .ConfigureAwait(false);
-            foreach (var dep in deps.Where(d => d.RelationType == 3))
+            try
             {
-                try
+                var deps = await CurseForgeSource.GetDependenciesAsync(projectId, main.Id, CancellationToken.None)
+                    .ConfigureAwait(false);
+                foreach (var dep in deps.Where(d => d.RelationType == 3))
                 {
-                    var depFiles = await CurseForgeSource.GetFilesAsync(
-                        dep.ModId, _gameVersion, loader, CancellationToken.None).ConfigureAwait(false);
-                    var depFile = depFiles.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f.DownloadUrl));
-                    if (depFile != null) EnqueueCfFile(state, depFile, names, isMain: false);
+                    try
+                    {
+                        var depFiles = await CurseForgeSource.GetFilesAsync(
+                            dep.ModId, _gameVersion, loader, CancellationToken.None).ConfigureAwait(false);
+                        var depFile = depFiles.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f.DownloadUrl));
+                        if (depFile != null) EnqueueCfFile(state, depFile, names, isMain: false);
+                    }
+                    catch (Exception)
+                    {
+                        // 单个前置失败不阻塞本体;缺少前置由游戏启动时的模组加载器报出来
+                    }
                 }
-                catch (Exception)
-                {
-                    // 单个前置失败不阻塞本体;缺少前置由游戏启动时的模组加载器报出来
-                }
+            }
+            catch (Exception ex)
+            {
+                // 依赖查询失败不能把已经入队的本体判成下载失败
+                WidgetWindow.Boot("[content] dependency lookup failed: " + hit.Title + " · " + ex.Message);
             }
         }
     }

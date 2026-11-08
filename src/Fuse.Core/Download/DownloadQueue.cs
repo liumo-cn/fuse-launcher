@@ -555,10 +555,10 @@ public sealed class DownloadQueue
             /// <summary>实例目录(可选):外部目录布局 = 根目录本身,不设时按 instancesRoot/id。</summary>
             public string? InstanceDir { get; set; }
             /// <summary>CurseForge 整合包:队列内下载 pack zip 并合成 mrpack,才有进度和暂停。</summary>
-            public int CurseForgeProjectId { get; set; }
-            public int CurseForgeFileId { get; set; }
-            public string? CurseForgeDownloadUrl { get; set; }
-            public string? CurseForgeSha1 { get; set; }
+            [JsonProperty("cfProjectId")] public int CurseForgeProjectId { get; set; }
+            [JsonProperty("cfFileId")] public int CurseForgeFileId { get; set; }
+            [JsonProperty("cfDownloadUrl")] public string? CurseForgeDownloadUrl { get; set; }
+            [JsonProperty("cfSha1")] public string? CurseForgeSha1 { get; set; }
         }
 
         /// <summary>
