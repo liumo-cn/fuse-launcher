@@ -44,6 +44,10 @@ public sealed class DownloadTaskRecord
     public double Progress { get; set; }
     public long TotalBytes { get; set; }
     public string? ErrorMessage { get; set; }
+    /// <summary>整合包装完后仍需手动下载的模组(作者禁止第三方 API),已带项目/文件 ID</summary>
+    public List<ManualModDownload>? ManualMods { get; set; }
+    /// <summary>这些模组要放进哪个 mods 目录(一键打开用)</summary>
+    public string? ManualModsDir { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.Now;
     public DateTime? FinishedAt { get; set; }
 }
@@ -320,6 +324,8 @@ public sealed class DownloadQueue
         record.Status = DownloadTaskStatus.Downloading;
         record.Pausing = false;
         record.ErrorMessage = null;
+        record.ManualMods = null;
+        record.ManualModsDir = null;
         _store.Upsert(record);
         OnChanged(record);
         Trace("run " + record.TaskId + " (" + record.Kind + ")");
@@ -752,6 +758,9 @@ public sealed class DownloadQueue
                         catch (IOException)
                         {
                         }
+                        // 带上结构化清单:原因弹窗可以直接一键开网页,不用再解析文字
+                        record.ManualModsDir = Path.Combine(gameDir, "mods");
+                        record.ManualMods = ManualModDownloads.ParseEntries(cfMissingFiles);
                         throw new IOException(
                             "整合包已安装，但需手动下载 " + cfMissingFiles.Count + " 个模组（作者禁止第三方 API 下载）。"
                             + "清单已写到 " + missingPath + Environment.NewLine + list);

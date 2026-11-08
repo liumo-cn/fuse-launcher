@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1034,14 +1035,62 @@ public class DownloadPanel : UserControl
         System.Windows.Automation.AutomationProperties.SetName(box, "失败原因");
         stack.Children.Add(box);
 
+        // 老任务只有文字,新任务带结构化清单;两边都认
+        var manualMods = task.ManualMods is { Count: > 0 }
+            ? task.ManualMods!
+            : ManualModDownloads.ParseFromMessage(task.ErrorMessage);
+        var modsDir = task.ManualModsDir ?? ManualModDownloads.ModsDirectoryFromMessage(task.ErrorMessage);
+
+        void Copy() => ClipboardHelper.TrySetText(task.ErrorMessage ?? "");
+
         Window? window = null;
-        stack.Children.Add(DialogKit.Buttons(
-            DialogKit.Primary("复制原因", () =>
+        var buttons = new List<UIElement>();
+        if (manualMods.Count > 0)
+        {
+            buttons.Add(DialogKit.Primary("打开下载页", () =>
             {
-                ClipboardHelper.TrySetText(task.ErrorMessage ?? "");
-                Toast("已复制失败原因");
-            }),
-            DialogKit.Secondary("关闭", () => window!.DialogResult = true)));
+                var opened = 0;
+                foreach (var mod in manualMods)
+                {
+                    if (string.IsNullOrEmpty(mod.PageUrl)) continue;
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo(mod.PageUrl) { UseShellExecute = true });
+                        opened++;
+                    }
+                    catch
+                    {
+                    }
+                }
+                var folderOpened = false;
+                if (!string.IsNullOrEmpty(modsDir))
+                {
+                    try
+                    {
+                        // 目录刚装完就在,不在也先建好,用户下完直接拖进去
+                        Directory.CreateDirectory(modsDir);
+                        Process.Start("explorer.exe", "\"" + modsDir + "\"");
+                        folderOpened = true;
+                    }
+                    catch
+                    {
+                    }
+                }
+                if (opened == 0 && !folderOpened)
+                    Toast("打开浏览器失败，请手动访问 CurseForge");
+                else if (folderOpened)
+                    Toast("已打开 " + opened + " 个下载页和 mods 文件夹");
+                else
+                    Toast("已打开 " + opened + " 个下载页");
+            }));
+            buttons.Add(DialogKit.Secondary("复制原因", () => { Copy(); Toast("已复制失败原因"); }));
+        }
+        else
+        {
+            buttons.Add(DialogKit.Primary("复制原因", () => { Copy(); Toast("已复制失败原因"); }));
+        }
+        buttons.Add(DialogKit.Secondary("关闭", () => window!.DialogResult = true));
+        stack.Children.Add(DialogKit.Buttons(buttons.ToArray()));
         window = new Window { Width = 460, Content = DialogKit.Card(stack) };
         DialogKit.ApplyWindow(window, 460);
         window.Owner = Window.GetWindow(this) ?? AppServices.Widget;
