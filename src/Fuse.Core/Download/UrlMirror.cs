@@ -40,6 +40,13 @@ public static class UrlMirror
     private const string CernetMaven = "https://mirrors.cernet.edu.cn/bmclapi/";
     /// <summary>NeoForged 官方 CDN(与 maven.neoforged.net 同构,国内实测快一个数量级)。</summary>
     private const string NeoCdn = "https://neoforged.forgecdn.net";
+    private const string EdgeCdn = "https://edge.forgecdn.net/";
+    private const string MediaCdn = "https://mediafilez.forgecdn.net/";
+
+    private static string NormalizeCdn(string url)
+        => url.StartsWith(EdgeCdn, StringComparison.OrdinalIgnoreCase)
+            ? MediaCdn + url.Substring(EdgeCdn.Length)
+            : url;
 
     /// <summary>下载源策略(对应 official / balanced / mirror 三档)。</summary>
     public enum SourceMode
@@ -79,6 +86,9 @@ public static class UrlMirror
     public static string ForAttempt(string url, int attempt)
     {
         if (string.IsNullOrEmpty(url)) return url;
+        // CurseForge 的 edge CDN 对带 Range 的 GET 直接 404(HEAD/普通 GET 才 302),
+        // 换成真正的 mediafilez 源,S3 支持 Range。
+        url = NormalizeCdn(url);
         if (Mode == SourceMode.Official) return url;
         if (Mode == SourceMode.Mirror) return Rewrite(url, attempt);
         if (attempt < 0) attempt = 0;

@@ -252,6 +252,25 @@ public sealed class ChunkedDownloader(HttpClient http)
                 }
                 if (status >= 400 && status != 408)
                 {
+                    // 有些 CDN(如 CurseForge edge)对带 Range 的 GET 直接 404,普通 GET 才 302。
+                    // 先在同一个源上不带 Range 试一次;能拿到长度就退化为单流下载。
+                    if (attempt == 0)
+                    {
+                        try
+                        {
+                            using var plain = new HttpRequestMessage(HttpMethod.Get, attemptUrl);
+                            using var plainResponse = await http.SendAsync(
+                                plain, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                            if ((int)plainResponse.StatusCode < 400 &&
+                                plainResponse.Content.Headers.ContentLength.HasValue)
+                                return (plainResponse.Content.Headers.ContentLength.Value, false);
+                        }
+                        catch (Exception ex)
+                        {
+                            last = ex;
+                        }
+                    }
+
                     // 同一个 URL 上重试 403/404 没意义(403 的响应体还往往只有 1 字节,
                     // 继续读会被当成“文件大小 1 字节”);但 attempt 本身会换源
                     // (官方↔镜像 / BMCL↔USTC↔QLU),所以只要下一个 attempt 指向别的地址就继续。

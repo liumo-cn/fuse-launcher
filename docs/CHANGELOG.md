@@ -34,6 +34,8 @@
 - 修复 CurseForge 整合包任务元数据字段名不匹配导致全部报「缺少必要参数」；
   必需文件解析失败会重试，仍失败则整包明确报错，不再装出缺前置的半成品。
 - 修复 CurseForge 模组依赖查询失败时把已入队的本体误判成下载失败。
+- 修复 CurseForge edge CDN 对带 Range 的请求返回 404：
+  下载自动换到 mediafilez 源；不支持的源退化为普通 GET 单流。
 - 修复外部版本隔离目录被判成 instances 布局：版本详情 0 模组、
   模组文件夹指向空的 instances/<id>。新的整合包实例写到 versions/<id>。
 - 修复版本继承的库重复：同一 group:artifact:classifier 只保留子版本那份。

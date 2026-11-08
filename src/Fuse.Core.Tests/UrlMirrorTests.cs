@@ -128,6 +128,15 @@ public class UrlMirrorTests
     }
 
     [Fact]
+    public void ForAttempt_CurseForgeEdge_UsesMediaHost()
+    {
+        const string edge = "https://edge.forgecdn.net/files/9490/518/BMC4-FORGE-1.20.1-v63.zip";
+        Assert.Equal(
+            "https://mediafilez.forgecdn.net/files/9490/518/BMC4-FORGE-1.20.1-v63.zip",
+            UrlMirror.ForAttempt(edge, 0));
+    }
+
+    [Fact]
     public void Order_WithoutProbe_ReturnsOriginalList()
     {
         var sources = new[] { "https://a.example", "https://b.example" };
