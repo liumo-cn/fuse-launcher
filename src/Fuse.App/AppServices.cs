@@ -554,12 +554,41 @@ public static class AppServices
     }
 
     /// <summary>
-    /// 布局判别:主目录(或带 instances 子目录的目录)是我们的"实例隔离"布局;
-    /// 导入的官方或第三方目录是共享根布局(游戏目录 = 根本身,mods/saves 都在根下)。
+    /// 布局判别:主目录是我们的"实例隔离"布局。
+    /// 其它目录不能只看有没有 instances:外部启动器开了版本隔离时,
+    /// versions/&lt;id&gt; 才是实例目录,instances/&lt;id&gt; 可能只是误创建的空目录。
     /// </summary>
-    public static bool IsManagedLayout(string root) =>
-        root.Equals(InstallDirectory, StringComparison.OrdinalIgnoreCase) ||
-        Directory.Exists(Path.Combine(root, "instances"));
+    public static bool IsManagedLayout(string root)
+    {
+        if (root.Equals(InstallDirectory, StringComparison.OrdinalIgnoreCase)) return true;
+        var instancesDir = Path.Combine(root, "instances");
+        if (!Directory.Exists(instancesDir)) return false;
+
+        var anyVersionIsolated = false;
+        var anyInstanceIsolated = false;
+        try
+        {
+            var versionsDir = Path.Combine(root, "versions");
+            if (Directory.Exists(versionsDir))
+            {
+                foreach (var dir in Directory.EnumerateDirectories(versionsDir))
+                {
+                    var id = Path.GetFileName(dir);
+                    if (!File.Exists(Path.Combine(dir, id + ".json"))) continue;
+                    if (Fuse.Core.Versioning.InstanceLayout.IsIsolated(dir)) anyVersionIsolated = true;
+                    if (Fuse.Core.Versioning.InstanceLayout.IsIsolated(Path.Combine(instancesDir, id)))
+                        anyInstanceIsolated = true;
+                }
+            }
+        }
+        catch (Exception)
+        {
+        }
+
+        // versions 已经是实例、instances 却是空的 → 外部隔离布局
+        if (anyVersionIsolated && !anyInstanceIsolated) return false;
+        return true;
+    }
 
     /// <summary>
     /// 某目录下某版本的"实例目录":
@@ -567,10 +596,29 @@ public static class AppServices
     ///   外部共享布局(未开版本隔离) → 根目录本身;
     ///   外部隔离布局(开了版本隔离) → versions/&lt;id&gt;。
     /// </summary>
-    public static string InstanceDirectoryIn(string root, string versionId) =>
-        IsManagedLayout(root)
-            ? Path.Combine(root, "instances", versionId)
+    public static string InstanceDirectoryIn(string root, string versionId)
+    {
+        var managed = Path.Combine(root, "instances", versionId);
+        if (root.Equals(InstallDirectory, StringComparison.OrdinalIgnoreCase)) return managed;
+
+        var versionDir = Path.Combine(root, "versions", versionId);
+        // 版本目录有 mods/saves/Setup.ini 隔离标记,而 instances/<id> 是空的:用版本目录
+        if (Fuse.Core.Versioning.InstanceLayout.IsIsolated(versionDir) &&
+            !Fuse.Core.Versioning.InstanceLayout.IsIsolated(managed))
+            return versionDir;
+
+        return IsManagedLayout(root)
+            ? managed
             : Fuse.Core.Versioning.InstanceLayout.ResolveExternal(root, versionId);
+    }
+
+    /// <summary>新建整合包实例的落地目录:外部目录用 versions/&lt;id&gt;,不往共享根里写 mods。</summary>
+    public static string NewPackInstanceDirectoryIn(string root, string versionId)
+    {
+        if (root.Equals(InstallDirectory, StringComparison.OrdinalIgnoreCase) || IsManagedLayout(root))
+            return Path.Combine(root, "instances", versionId);
+        return Path.Combine(root, "versions", versionId);
+    }
 
     /// <summary>在所有游戏目录里找版本所在目录(激活目录优先);找不到返回 null。</summary>
     public static string? FindVersionRoot(string versionId)

@@ -27,6 +27,12 @@
 - 小文件进度按 100ms 节流，几千个文件时不再把 UI 线程刷爆。
 - 客户端 jar 等大文件也进共享缓存；Objects 没测速结果时官方优先，
   不再默认去 BMCL 上慢拖。
+- CurseForge 整合包的本体下载和 manifest 逐文件解析移进下载队列：
+  有进度、可暂停，不再在 UI 线程里串行跑完才出现任务。
+- 整合包文件下载直接拉满配置并发（不再从 8 慢慢爬）；
+  解包和 overrides 复制也会响应暂停。
+- 修复外部版本隔离目录被判成 instances 布局：版本详情 0 模组、
+  模组文件夹指向空的 instances/<id>。新的整合包实例写到 versions/<id>。
 - 修复版本继承的库重复：同一 group:artifact:classifier 只保留子版本那份。
   Fabric 0.20 + 1.21.10 的 ASM 9.11 / 9.6 同时进 classpath，
   Fabric loader 会报 duplicate ASM classes 并退出。

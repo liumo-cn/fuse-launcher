@@ -844,7 +844,7 @@ public class DownloadPanel : UserControl
                     await Dispatcher.InvokeAsync(new Action(() =>
                     {
                         marker.Tag = null;
-                        Toast("正在解析 CurseForge 整合包:" + hit.Title);
+                        Toast("已加入下载任务:" + hit.Title);
                     }));
                 }
                 catch (Exception ex)
@@ -877,7 +877,7 @@ public class DownloadPanel : UserControl
                     ["assetsRoot"] = AppServices.AssetsRoot,
                     ["instancesRoot"] = Path.Combine(AppServices.ActiveGameDirectory, "instances"),
                     // 外部目录(共享根布局)没有 instances 隔离:实例目录就是根目录本身
-                    ["instanceDir"] = AppServices.InstanceDirectoryIn(AppServices.ActiveGameDirectory, packVersionId),
+                    ["instanceDir"] = AppServices.NewPackInstanceDirectoryIn(AppServices.ActiveGameDirectory, packVersionId),
                 }.ToString();
                 var task = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
                 {
@@ -951,105 +951,24 @@ public class DownloadPanel : UserControl
         if (main == null)
             throw new InvalidOperationException("作者未授权第三方下载，请在网页中打开");
 
-        var temp = Path.Combine(Path.GetTempPath(), "fuse-cfpack-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(temp);
-        var zipPath = Path.Combine(temp, "pack.zip");
-        using (var resp = await AppServices.Http.GetAsync(main.DownloadUrl, CancellationToken.None).ConfigureAwait(false))
-        {
-            resp.EnsureSuccessStatusCode();
-            using var input = await resp.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            using var output = File.Create(zipPath);
-            await input.CopyToAsync(output).ConfigureAwait(false);
-        }
-
-        string gameVersion, loaderKey, loaderVersion;
-        var indexFiles = new Newtonsoft.Json.Linq.JArray();
-        using (var zip = System.IO.Compression.ZipFile.OpenRead(zipPath))
-        {
-            var manifestEntry = zip.GetEntry("manifest.json")
-                                ?? throw new InvalidOperationException("整合包缺少 manifest.json");
-            Newtonsoft.Json.Linq.JObject manifest;
-            using (var reader = new StreamReader(manifestEntry.Open()))
-                manifest = Newtonsoft.Json.Linq.JObject.Parse(reader.ReadToEnd());
-
-            gameVersion = manifest["minecraft"]?["version"]?.ToString() ?? "";
-            var loaderId = (manifest["minecraft"]?["modLoaders"] as Newtonsoft.Json.Linq.JArray)?
-                .First?["id"]?.ToString() ?? "";
-            var dash = loaderId.IndexOf('-');
-            loaderKey = dash > 0 ? loaderId.Substring(0, dash) : "";
-            loaderVersion = dash > 0 ? loaderId.Substring(dash + 1) : "";
-
-            foreach (var f in (manifest["files"] as Newtonsoft.Json.Linq.JArray) ?? new Newtonsoft.Json.Linq.JArray())
-            {
-                var pid = f.Value<int?>("projectID") ?? 0;
-                var fid = f.Value<int?>("fileID") ?? 0;
-                if (pid == 0 || fid == 0) continue;
-                try
-                {
-                    var meta = await CurseForgeSource.GetFileAsync(pid, fid, CancellationToken.None, skipRateLimit: true)
-                        .ConfigureAwait(false);
-                    if (string.IsNullOrWhiteSpace(meta.DownloadUrl)) continue;
-                    indexFiles.Add(new Newtonsoft.Json.Linq.JObject
-                    {
-                        ["path"] = "mods/" + meta.FileName,
-                        ["hashes"] = new Newtonsoft.Json.Linq.JObject { ["sha1"] = meta.Sha1 ?? "" },
-                        ["downloads"] = new Newtonsoft.Json.Linq.JArray(meta.DownloadUrl!),
-                        ["fileSize"] = meta.FileLength,
-                    });
-                }
-                catch (Exception)
-                {
-                    // 单个文件解析失败不阻断整包
-                }
-            }
-        }
-
-        var index = new Newtonsoft.Json.Linq.JObject
-        {
-            ["formatVersion"] = 1,
-            ["game"] = "minecraft",
-            ["versionId"] = main.DisplayName,
-            ["name"] = hit.Title,
-            ["dependencies"] = new Newtonsoft.Json.Linq.JObject
-            {
-                ["minecraft"] = gameVersion,
-                [loaderKey] = loaderVersion,
-            },
-            ["files"] = indexFiles,
-        };
-
-        var mrpackPath = Path.Combine(temp, "pack.mrpack");
-        using (var source = System.IO.Compression.ZipFile.OpenRead(zipPath))
-        using (var dest = System.IO.Compression.ZipFile.Open(mrpackPath, System.IO.Compression.ZipArchiveMode.Create))
-        {
-            var indexEntry = dest.CreateEntry("modrinth.index.json");
-            using (var w = new StreamWriter(indexEntry.Open()))
-                w.Write(index.ToString());
-            foreach (var entry in source.Entries)
-            {
-                if (string.IsNullOrEmpty(entry.Name)) continue;
-                if (!entry.FullName.StartsWith("overrides/", StringComparison.OrdinalIgnoreCase) &&
-                    !entry.FullName.StartsWith("client-overrides/", StringComparison.OrdinalIgnoreCase)) continue;
-                var copy = dest.CreateEntry(entry.FullName);
-                using var es = entry.Open();
-                using var ds = copy.Open();
-                await es.CopyToAsync(ds).ConfigureAwait(false);
-            }
-        }
-
-        var packVersionId = DownloadQueue.SanitizePackVersionId(hit.Slug, main.DisplayName);
+        var packVersionId = Fuse.Core.Download.DownloadQueue.SanitizePackVersionId(hit.Slug, main.DisplayName);
+        var root = AppServices.ActiveGameDirectory;
+        // 只做一次 API 列表查询，真正的 pack zip 下载和 manifest 逐文件解析都放进队列，
+        // 这样任务面板有进度，暂停按钮也能真正取消。
         var metaJson = new Newtonsoft.Json.Linq.JObject
         {
-            ["mrpackUrl"] = main.DownloadUrl,
-            ["mrpackLocalPath"] = mrpackPath,
+            ["cfProjectId"] = projectId,
+            ["cfFileId"] = main.Id,
+            ["cfDownloadUrl"] = main.DownloadUrl,
+            ["cfSha1"] = main.Sha1,
             ["packSlug"] = hit.Slug,
             ["versionNumber"] = main.DisplayName,
             ["title"] = hit.Title,
             ["versionsRoot"] = AppServices.VersionsRoot,
             ["librariesRoot"] = AppServices.LibrariesRoot,
             ["assetsRoot"] = AppServices.AssetsRoot,
-            ["instancesRoot"] = Path.Combine(AppServices.ActiveGameDirectory, "instances"),
-            ["instanceDir"] = AppServices.InstanceDirectoryIn(AppServices.ActiveGameDirectory, packVersionId),
+            ["instancesRoot"] = Path.Combine(root, "instances"),
+            ["instanceDir"] = AppServices.NewPackInstanceDirectoryIn(root, packVersionId),
         }.ToString();
         var task = AppServices.Queue!.Enqueue(new DownloadTaskRecord
         {

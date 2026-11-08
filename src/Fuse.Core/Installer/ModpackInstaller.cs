@@ -3,6 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using Fuse.Core.Sources;
 using Newtonsoft.Json.Linq;
 
 namespace Fuse.Core.Installer;
@@ -68,7 +72,8 @@ public static class ModpackInstaller
     }
 
     /// <summary>把 overrides/ 与 client-overrides/ 解压进实例目录(不覆盖 index 文件清单里的路径)。</summary>
-    public static void ExtractOverrides(string extractDir, string gameDir, ISet<string> reserved)
+    public static void ExtractOverrides(
+        string extractDir, string gameDir, ISet<string> reserved, CancellationToken ct = default)
     {
         foreach (var rootName in new[] { "overrides", "client-overrides" })
         {
@@ -77,6 +82,7 @@ public static class ModpackInstaller
             var fullRoot = Path.GetFullPath(root);
             foreach (var src in Directory.GetFiles(root, "*", SearchOption.AllDirectories))
             {
+                ct.ThrowIfCancellationRequested();
                 // netstandard2.0 没有 Path.GetRelativePath:root 是遍历起点,直接截前缀
                 var rel = Path.GetFullPath(src).Substring(fullRoot.Length).TrimStart(Path.DirectorySeparatorChar);
                 var normalized = rel.Replace('\\', '/');
@@ -102,16 +108,113 @@ public static class ModpackInstaller
         => new HashSet<string>(files.Select(f => f.RelativePath), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>把 zip 里的全部条目解到目录(mrpack 本体解包用)。</summary>
-    public static void ExtractAll(string mrpackPath, string extractDir)
+    public static void ExtractAll(string mrpackPath, string extractDir, CancellationToken ct = default)
     {
         Directory.CreateDirectory(extractDir);
         using var zip = ZipFile.OpenRead(mrpackPath);
         foreach (var entry in zip.Entries)
         {
+            ct.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(entry.Name)) continue;
             var target = Path.Combine(extractDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
             entry.ExtractToFile(target, overwrite: true);
         }
+    }
+
+    /// <summary>
+    /// 把 CurseForge 整合包 zip(manifest.json + overrides)转换成等价 .mrpack:
+    /// 逐个 fileID 查 API 拿 downloadUrl,再写 modrinth.index.json。
+    /// 解析过程带 CancellationToken,放回队列里执行,暂停/进度才有效。
+    /// </summary>
+    public static async Task BuildCurseForgeMrpackAsync(
+        HttpClient http, int projectId, string packZipPath, string outMrpackPath,
+        IProgress<double>? progress, CancellationToken ct)
+    {
+        using var source = ZipFile.OpenRead(packZipPath);
+        var manifestEntry = source.GetEntry("manifest.json")
+                            ?? throw new InvalidOperationException("CurseForge 整合包缺少 manifest.json");
+        JObject manifest;
+        using (var reader = new StreamReader(manifestEntry.Open()))
+            manifest = JObject.Parse(await reader.ReadToEndAsync().ConfigureAwait(false));
+        ct.ThrowIfCancellationRequested();
+
+        var gameVersion = manifest["minecraft"]?["version"]?.ToString() ?? "";
+        var loaderId = (manifest["minecraft"]?["modLoaders"] as JArray)?.First?["id"]?.ToString() ?? "";
+        var dash = loaderId.IndexOf('-');
+        var loaderKey = dash > 0 ? loaderId.Substring(0, dash) : "";
+        var loaderVersion = dash > 0 ? loaderId.Substring(dash + 1) : "";
+        var depKey = loaderKey == "fabric" ? "fabric-loader" : loaderKey;
+
+        var files = (manifest["files"] as JArray) ?? new JArray();
+        var indexFiles = new JArray();
+        var total = Math.Max(1, files.Count);
+        var done = 0;
+        foreach (var f in files.OfType<JObject>())
+        {
+            ct.ThrowIfCancellationRequested();
+            var pid = f.Value<int?>("projectID") ?? 0;
+            var fid = f.Value<int?>("fileID") ?? 0;
+            if (pid > 0 && fid > 0)
+            {
+                try
+                {
+                    var meta = await CurseForgeSource.GetFileAsync(pid, fid, ct, skipRateLimit: true)
+                        .ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(meta.DownloadUrl))
+                    {
+                        indexFiles.Add(new JObject
+                        {
+                            ["path"] = "mods/" + meta.FileName,
+                            ["hashes"] = new JObject { ["sha1"] = meta.Sha1 ?? "" },
+                            ["downloads"] = new JArray(meta.DownloadUrl!),
+                            ["fileSize"] = meta.FileLength,
+                        });
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception)
+                {
+                    // 单个文件解析失败不阻断整包
+                }
+            }
+            done++;
+            if (done % 5 == 0 || done == files.Count)
+                progress?.Report(0.9 * done / total);
+        }
+
+        var deps = new JObject { ["minecraft"] = gameVersion };
+        if (!string.IsNullOrEmpty(depKey) && !string.IsNullOrEmpty(loaderVersion))
+            deps[depKey] = loaderVersion;
+        var index = new JObject
+        {
+            ["formatVersion"] = 1,
+            ["game"] = "minecraft",
+            ["versionId"] = "1.0.0",
+            ["name"] = "",
+            ["dependencies"] = deps,
+            ["files"] = indexFiles,
+        };
+
+        if (File.Exists(outMrpackPath)) File.Delete(outMrpackPath);
+        using var dest = ZipFile.Open(outMrpackPath, ZipArchiveMode.Create);
+        var indexEntry = dest.CreateEntry("modrinth.index.json");
+        using (var writer = new StreamWriter(indexEntry.Open()))
+            await writer.WriteAsync(index.ToString()).ConfigureAwait(false);
+        foreach (var entry in source.Entries)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (string.IsNullOrEmpty(entry.Name)) continue;
+            if (!entry.FullName.StartsWith("overrides/", StringComparison.OrdinalIgnoreCase) &&
+                !entry.FullName.StartsWith("client-overrides/", StringComparison.OrdinalIgnoreCase)) continue;
+            var copy = dest.CreateEntry(entry.FullName);
+            using var es = entry.Open();
+            using var ds = copy.Open();
+            await es.CopyToAsync(ds, 81920, ct).ConfigureAwait(false);
+        }
+        progress?.Report(1.0);
     }
 }

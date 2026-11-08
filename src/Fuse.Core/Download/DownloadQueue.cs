@@ -554,6 +554,11 @@ public sealed class DownloadQueue
             public string? InstancesRoot { get; set; }
             /// <summary>实例目录(可选):外部目录布局 = 根目录本身,不设时按 instancesRoot/id。</summary>
             public string? InstanceDir { get; set; }
+            /// <summary>CurseForge 整合包:队列内下载 pack zip 并合成 mrpack,才有进度和暂停。</summary>
+            public int CurseForgeProjectId { get; set; }
+            public int CurseForgeFileId { get; set; }
+            public string? CurseForgeDownloadUrl { get; set; }
+            public string? CurseForgeSha1 { get; set; }
         }
 
         /// <summary>
@@ -567,7 +572,9 @@ public sealed class DownloadQueue
             var meta = JsonConvert.DeserializeObject<ModpackInstallMeta>(record.Meta ?? "{}")
                        ?? new ModpackInstallMeta();
             var hasLocalPack = !string.IsNullOrEmpty(meta.MrpackLocalPath) && File.Exists(meta.MrpackLocalPath);
-            if ((!hasLocalPack && string.IsNullOrEmpty(meta.MrpackUrl)) || string.IsNullOrEmpty(meta.PackSlug) ||
+            var hasCfPack = meta.CurseForgeProjectId > 0 && !string.IsNullOrEmpty(meta.CurseForgeDownloadUrl);
+            if ((!hasLocalPack && !hasCfPack && string.IsNullOrEmpty(meta.MrpackUrl)) ||
+                string.IsNullOrEmpty(meta.PackSlug) ||
                 string.IsNullOrEmpty(meta.VersionsRoot) || string.IsNullOrEmpty(meta.InstancesRoot))
                 throw new InvalidOperationException("整合包安装任务缺少必要参数");
 
@@ -590,6 +597,31 @@ public sealed class DownloadQueue
                         File.Copy(meta.MrpackLocalPath!, mrpackPath, overwrite: true);
                         progress.Report(0.05);
                     }
+                    else if (hasCfPack)
+                    {
+                        // CurseForge:先在队列里下 pack zip,再按 manifest 合成 mrpack。
+                        // 以前这段在 UI 线程里串行跑,没有任务/进度/暂停,看起来就是"点了没反应还特别慢"。
+                        var cfZip = Path.Combine(tempRoot, "cf-pack.zip");
+                        var cfDownloader = new SmallFileDownloader(_http);
+                        var cfResult = await cfDownloader.DownloadSetAsync(new[]
+                        {
+                            new FileDownloadItem
+                            {
+                                Url = meta.CurseForgeDownloadUrl!,
+                                DestPath = cfZip,
+                                ExpectedHash = string.IsNullOrEmpty(meta.CurseForgeSha1) ? null : meta.CurseForgeSha1,
+                                Algo = HashAlgo.Sha1,
+                            },
+                        }, new SmallFileOptions { Parallelism = 1 }, ToScaled(progress, 0.00, 0.02), cancellation)
+                            .ConfigureAwait(false);
+                        if (cfResult.Failed.Count > 0)
+                            throw new IOException("CurseForge 整合包本体下载失败:" + cfResult.Failed[0]);
+
+                        await Installer.ModpackInstaller.BuildCurseForgeMrpackAsync(
+                            _http, meta.CurseForgeProjectId, cfZip, mrpackPath,
+                            ToScaled(progress, 0.02, 0.03), cancellation).ConfigureAwait(false);
+                        Trace("modpack " + packVersionId + ": curseforge manifest converted");
+                    }
                     else
                     {
                         var mrDownloader = new SmallFileDownloader(_http);
@@ -609,7 +641,7 @@ public sealed class DownloadQueue
                     }
 
                     // 2. 解包 + 解析 index(5%)
-                    Installer.ModpackInstaller.ExtractAll(mrpackPath, tempRoot);
+                    Installer.ModpackInstaller.ExtractAll(mrpackPath, tempRoot, cancellation);
                     var index = Installer.ModpackInstaller.ParseIndex(tempRoot);
                     var gv = index.GameVersion;
                     Trace("modpack " + packVersionId + ": mc=" + gv + " loader=" + (index.LoaderType ?? "vanilla") +
@@ -701,7 +733,11 @@ public sealed class DownloadQueue
                     {
                         var downloader = new SmallFileDownloader(_http);
                         var result = await downloader.DownloadSetAsync(items,
-                            new SmallFileOptions { Parallelism = _smallFileParallelism },
+                            new SmallFileOptions
+                            {
+                                Parallelism = _smallFileParallelism,
+                                InitialParallelism = _smallFileParallelism,
+                            },
                             ToScaled(progress, 0.60, 0.32), cancellation).ConfigureAwait(false);
                         if (result.Failed.Count > 0)
                             throw new IOException($"整合包文件有 {result.Failed.Count} 个下载失败:{result.Failed[0]}");
@@ -710,7 +746,7 @@ public sealed class DownloadQueue
 
                     // 7. overrides(92~96%;index 清单路径不被覆盖)
                     Installer.ModpackInstaller.ExtractOverrides(
-                        tempRoot, gameDir, Installer.ModpackInstaller.ReservedPaths(index.Files));
+                        tempRoot, gameDir, Installer.ModpackInstaller.ReservedPaths(index.Files), cancellation);
                     progress.Report(1.0);
                     Trace("modpack " + packVersionId + ": done");
                 }
