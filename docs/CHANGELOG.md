@@ -27,6 +27,11 @@
 - 修复 natives-only 库（jinput-platform）被合成一个不存在的普通 jar，
   导致体检永远报「1 个库文件」缺失、补全任务反复入队。
 - 修复老 Forge 补全把版本拼成 `1.12.2-1.12.2-14.23.5.2860` 导致安装包 404。
+- 老版本 Java 加 `sun.net.client.defaultConnectTimeout/ReadTimeout` 上限：
+  整合包里的 mod（MoBends、Trinkets 等）在主线程拉 GitHub 配置时，
+  网络不通不再一卡 21 秒。
+- Java 8-14 的 G1 参数补上 `ParallelRefProcEnabled` 和 `DisableExplicitGC`，
+  避免 mod 调用 `System.gc()` 时在 8GB 堆上停好几秒。
 
 ## 1.2.4 — 2026-11-08
 
