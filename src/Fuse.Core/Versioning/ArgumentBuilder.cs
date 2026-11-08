@@ -182,6 +182,10 @@ public static class ArgumentBuilder
         }
 
         args.Insert(0, $"-Xmx{profile.MaxHeapMb}M");
+        // 老 mod 常用 HttpURLConnection 在主线程拉远程配置(MoBends 会连
+        // raw.githubusercontent.com),站点被墙时按系统默认要等 21 秒,看起来就是卡死
+        args.Add("-Dsun.net.client.defaultConnectTimeout=5000");
+        args.Add("-Dsun.net.client.defaultReadTimeout=10000");
         args.AddRange(BuildGcArgs(profile.JavaMajor));
         args.AddRange(BuildEncodingArgs(profile.JavaMajor));
         return args;
@@ -289,6 +293,9 @@ public static class ArgumentBuilder
             // ("VM option 'G1NewSizePercent' is experimental ...")。
             yield return "-XX:+UnlockExperimentalVMOptions";
             yield return "-XX:+UseG1GC";
+            yield return "-XX:+ParallelRefProcEnabled";
+            // 老 mod 会主动 System.gc(),8G 堆上一次显式 Full GC 能卡好几秒
+            yield return "-XX:+DisableExplicitGC";
             yield return "-XX:G1NewSizePercent=20";
             yield return "-XX:G1ReservePercent=20";
             yield return "-XX:MaxGCPauseMillis=50";
