@@ -27,16 +27,18 @@ internal static class DialogKit
         w.Width = width;
         w.WindowStartupLocation = WindowStartupLocation.CenterOwner;
         w.Topmost = true;
-        // 面板贴屏幕右边时 CenterOwner 会把弹窗推到屏幕外 内容直接被裁掉
-        // 显示后按工作区钳一下 保证整块可见
-        w.Loaded += (_, _) =>
+        // 面板贴着屏幕边时 CenterOwner 可能把弹窗顶出去一截 内容被裁掉
+        // Loaded 时 SizeToContent 还没算完 所以 ContentRendered 再来一次
+        void Clamp()
         {
             var area = SystemParameters.WorkArea;
             if (w.ActualWidth > 0)
                 w.Left = Math.Max(area.Left + 8, Math.Min(area.Right - w.ActualWidth - 8, w.Left));
             if (w.ActualHeight > 0)
                 w.Top = Math.Max(area.Top + 8, Math.Min(area.Bottom - w.ActualHeight - 8, w.Top));
-        };
+        }
+        w.Loaded += (_, _) => Clamp();
+        w.ContentRendered += (_, _) => Clamp();
     }
 
     public static Border Card(UIElement content) => new Border
