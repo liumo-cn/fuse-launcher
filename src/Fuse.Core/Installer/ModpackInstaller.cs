@@ -162,9 +162,11 @@ public static class ModpackInstaller
             {
                 for (var attempt = 0; attempt < 3 && meta == null; attempt++)
                 {
+                    using var attemptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    attemptCts.CancelAfter(TimeSpan.FromSeconds(15));
                     try
                     {
-                        meta = await CurseForgeSource.GetFileAsync(pid, fid, ct, skipRateLimit: true)
+                        meta = await CurseForgeSource.GetFileAsync(pid, fid, attemptCts.Token, skipRateLimit: true)
                             .ConfigureAwait(false);
                     }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -184,8 +186,10 @@ public static class ModpackInstaller
                 // fileID(有些源单文件接口 404 但列表里还在),找不到就退到最新适配版本。
                 try
                 {
+                    using var listCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    listCts.CancelAfter(TimeSpan.FromSeconds(20));
                     var candidates = await CurseForgeSource.GetFilesAsync(
-                        pid, gameVersion, loaderKey, ct).ConfigureAwait(false);
+                        pid, gameVersion, loaderKey, listCts.Token).ConfigureAwait(false);
                     var fallback = candidates.FirstOrDefault(x => x.Id == fid && !string.IsNullOrWhiteSpace(x.DownloadUrl))
                                    ?? candidates.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.DownloadUrl));
                     if (fallback != null)
