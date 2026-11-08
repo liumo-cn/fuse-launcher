@@ -602,20 +602,14 @@ public sealed class DownloadQueue
                         // CurseForge:先在队列里下 pack zip,再按 manifest 合成 mrpack。
                         // 以前这段在 UI 线程里串行跑,没有任务/进度/暂停,看起来就是"点了没反应还特别慢"。
                         var cfZip = Path.Combine(tempRoot, "cf-pack.zip");
-                        var cfDownloader = new SmallFileDownloader(_http);
-                        var cfResult = await cfDownloader.DownloadSetAsync(new[]
-                        {
-                            new FileDownloadItem
-                            {
-                                Url = meta.CurseForgeDownloadUrl!,
-                                DestPath = cfZip,
-                                ExpectedHash = string.IsNullOrEmpty(meta.CurseForgeSha1) ? null : meta.CurseForgeSha1,
-                                Algo = HashAlgo.Sha1,
-                            },
-                        }, new SmallFileOptions { Parallelism = 1 }, ToScaled(progress, 0.00, 0.02), cancellation)
-                            .ConfigureAwait(false);
-                        if (cfResult.Failed.Count > 0)
-                            throw new IOException("CurseForge 整合包本体下载失败:" + cfResult.Failed[0]);
+                        // 整合包本体是几十到几百 MB,走分块下载:有进度,多连接也快
+                        var cfDownloader = new ChunkedDownloader(_http);
+                        await cfDownloader.DownloadAsync(
+                            meta.CurseForgeDownloadUrl!,
+                            cfZip,
+                            string.IsNullOrEmpty(meta.CurseForgeSha1) ? null : meta.CurseForgeSha1,
+                            new ChunkedDownloadOptions { Parallelism = 4 },
+                            ToScaled(progress, 0.00, 0.02), cancellation).ConfigureAwait(false);
 
                         await Installer.ModpackInstaller.BuildCurseForgeMrpackAsync(
                             _http, meta.CurseForgeProjectId, cfZip, mrpackPath,
@@ -624,20 +618,14 @@ public sealed class DownloadQueue
                     }
                     else
                     {
-                        var mrDownloader = new SmallFileDownloader(_http);
-                        var mrResult = await mrDownloader.DownloadSetAsync(new[]
-                        {
-                            new FileDownloadItem
-                            {
-                                Url = meta.MrpackUrl!,
-                                DestPath = mrpackPath,
-                                ExpectedHash = string.IsNullOrEmpty(meta.MrpackSha1) ? null : meta.MrpackSha1,
-                                Algo = HashAlgo.Sha1,
-                            },
-                        }, new SmallFileOptions { Parallelism = 1 }, ToScaled(progress, 0.00, 0.05), cancellation)
-                            .ConfigureAwait(false);
-                        if (mrResult.Failed.Count > 0)
-                            throw new IOException("整合包本体下载失败:" + mrResult.Failed[0]);
+                        // 整合包本体是几十到几百 MB,走分块下载:有进度,多连接也快
+                        var mrDownloader = new ChunkedDownloader(_http);
+                        await mrDownloader.DownloadAsync(
+                            meta.MrpackUrl!,
+                            mrpackPath,
+                            string.IsNullOrEmpty(meta.MrpackSha1) ? null : meta.MrpackSha1,
+                            new ChunkedDownloadOptions { Parallelism = 4 },
+                            ToScaled(progress, 0.00, 0.05), cancellation).ConfigureAwait(false);
                     }
 
                     // 2. 解包 + 解析 index(5%)
