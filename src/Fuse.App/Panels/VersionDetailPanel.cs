@@ -1187,15 +1187,37 @@ public class VersionDetailPanel : UserControl
             Margin = new Thickness(0, 4, 0, 0),
         });
 
-        var wrap = new WrapPanel { Margin = new Thickness(0, 8, 0, 0) };
-        wrap.Children.Add(Chip("分析最近崩溃", "分析最近崩溃", AnalyzeCrash));
-        wrap.Children.Add(Chip("查看最新日志", "查看最新日志", () =>
-            OpenLogViewer(Path.Combine(InstDir(), "logs", "latest.log"), "最新日志")));
-        wrap.Children.Add(Chip("查看最近崩溃", "查看最近崩溃", OpenLatestCrashReport));
-        wrap.Children.Add(Chip("全部禁用（安全模式）", "全部禁用模组", SafeModeDisableAll));
-        wrap.Children.Add(Chip("校验并修复文件", "校验并修复文件", VerifyAndRepair));
-        wrap.Children.Add(Chip("打开崩溃报告", "打开崩溃报告", OpenCrashFolder));
-        host.Children.Add(wrap);
+        // 两列三行:左列三个“查看/分析”,右列三个“处理”,按钮等宽等高
+        var grid = new Grid { Margin = new Thickness(0, 8, 0, 0) };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        for (var i = 0; i < 3; i++)
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+        var chips = new (string Text, string AutoName, Action Click)[]
+        {
+            ("分析最近崩溃", "分析最近崩溃", AnalyzeCrash),
+            ("查看最新日志", "查看最新日志", () =>
+                OpenLogViewer(Path.Combine(InstDir(), "logs", "latest.log"), "最新日志")),
+            ("查看最近崩溃", "查看最近崩溃", OpenLatestCrashReport),
+            ("全部禁用", "全部禁用模组", SafeModeDisableAll),
+            ("校验并修复文件", "校验并修复文件", VerifyAndRepair),
+            ("打开崩溃报告", "打开崩溃报告", OpenCrashFolder),
+        };
+        for (var i = 0; i < chips.Length; i++)
+        {
+            var (text, autoName, click) = chips[i];
+            var button = Chip(text, autoName, click);
+            button.HorizontalAlignment = HorizontalAlignment.Stretch;
+            button.Height = 36;
+            var leftColumn = i < 3;
+            button.Margin = new Thickness(
+                leftColumn ? 0 : 4, 0, leftColumn ? 4 : 0, i % 3 == 2 ? 0 : 6);
+            Grid.SetColumn(button, leftColumn ? 0 : 1);
+            Grid.SetRow(button, i % 3);
+            grid.Children.Add(button);
+        }
+        host.Children.Add(grid);
 
         card.Child = host;
         _crashCard = card;
