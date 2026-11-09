@@ -86,12 +86,16 @@ public static class AppLauncher
                 try
                 {
                     var gameVersion = Fuse.Core.Versioning.VersionJsonLoader.ResolveGameVersion(versionsRoot, versionId);
+                    Log("precheck gv=" + gameVersion);
                     var modsDir = System.IO.Path.Combine(gameDirectory, "mods");
                     if (System.IO.Directory.Exists(modsDir))
                     {
+                        Log("precheck analyzing mods=" + modsDir);
                         var loader = DetectLoader(versionsRoot, versionId);
+                        Log("precheck loader=" + loader);
                         var report = await Task.Run(() =>
                             Fuse.Core.ModConflict.ModConflictAnalyzer.Analyze(modsDir, gameVersion, loader));
+                        Log("precheck done actions=" + report.Actions.Count);
                         if (report.Actions.Any(a => a.CanAutoFix))
                         {
                             var dialog = new ModConflictWindow(report)
@@ -134,7 +138,9 @@ public static class AppLauncher
             }
 
             // 外置登录账号:先静默换新 token 并确保 authlib-injector 就位(失败会抛,走下面的 catch + 弹窗)
+            Log("precheck skipped-or-done");
             var agentArg = await AppServices.PrepareExternalLaunchAsync().ConfigureAwait(false);
+            Log("auth prep done (agent=" + (agentArg == null ? "none" : "yes") + ")");
 
             // 皮肤来源跟账号类型走:外置/正版停用 CSL(官方/站点供皮),离线铺本地皮肤
             await AppServices.PrepareSkinAsync(versionId, root).ConfigureAwait(false);

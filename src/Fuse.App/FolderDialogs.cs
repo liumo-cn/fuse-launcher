@@ -26,7 +26,9 @@ internal static class DialogKit
         w.SizeToContent = SizeToContent.Height;
         w.Width = width;
         w.WindowStartupLocation = WindowStartupLocation.CenterOwner;
-        w.Topmost = true;
+        // 不设 Topmost:悬浮组件本身就是 Topmost,两个 Topmost 窗口互为 owner 时
+        // Win32 会陷入 z-order 之争(实测 CPU 常驻 30-40% 且窗口迟迟不渲染)。
+        // ShowDialog 本就会把对话框压在 owner 之上,Topmost 是多余的。
         // 面板贴着屏幕边时 CenterOwner 可能把弹窗顶出去一截 内容被裁掉
         // Loaded 时 SizeToContent 还没算完 所以 ContentRendered 再来一次
         void Clamp()
@@ -39,6 +41,18 @@ internal static class DialogKit
         }
         w.Loaded += (_, _) => Clamp();
         w.ContentRendered += (_, _) => Clamp();
+        // SizeToContent 的高度和玻璃效果可能晚于 ContentRendered 稳定:短定时器再钳两次
+        var clampTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(150),
+        };
+        var clampTicks = 0;
+        clampTimer.Tick += (_, _) =>
+        {
+            Clamp();
+            if (++clampTicks >= 6) clampTimer.Stop();
+        };
+        w.Loaded += (_, _) => clampTimer.Start();
     }
 
     public static Border Card(UIElement content) => new Border
