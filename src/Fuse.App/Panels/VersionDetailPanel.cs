@@ -3462,15 +3462,141 @@ public class VersionDetailPanel : UserControl
         _browseDestDir = "";
         BuildBrowseUi(isModsTab: true);
 
+        // 共用游戏目录的版本先提醒:装进根 mods 的模组所有版本都会读到
+        var sharedWarning = BuildSharedLayoutWarning();
+        if (sharedWarning != null) _content.Children.Insert(0, sharedWarning);
+
         // 整合包实例:顶栏提醒一句,但列表照常显示(之前整页只剩提醒,用户以为内容看不了)
         if (IsModpackVersion() && !_modpackWarningDismissed)
-            _content.Children.Insert(0, BuildModpackModWarning());
+            _content.Children.Insert(sharedWarning == null ? 0 : 1, BuildModpackModWarning());
     }
 
     /// <summary>
     /// 光影/材质页:与模组页同骨架(搜索 + 类型浮层 + 无限滚动),数据源与落盘目录不同。
     /// 光影页先做前置检测,没有 Iris / Oculus / OptiFine 时给"一键安装配套前置"。
     /// </summary>
+    /// <summary>共用游戏目录(没开版本隔离)的提醒:装进根 mods 的模组所有共用版本都会读到。</summary>
+    private Border? BuildSharedLayoutWarning()
+    {
+        if (!SharedGameDirectory()) return null;
+        var count = Directory.Exists(ModsDir())
+            ? Directory.GetFiles(ModsDir(), "*.jar").Length
+            : 0;
+        var card = new Border
+        {
+            Style = (Style)Application.Current.Resources["OptRow"],
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        var host = new StackPanel();
+        host.Children.Add(new TextBlock
+        {
+            Text = "这个版本没有开启版本隔离",
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
+        });
+        host.Children.Add(new TextBlock
+        {
+            Text = "模组/光影/材质装在共用目录（" + InstDir() + "），所有没开隔离的版本都会读到。\n" +
+                   "共用 mods 当前有 " + count + " 个文件；给这个版本装的模组会出现在其它版本里，装错版本会让别的版本启动失败。",
+            FontSize = 11.5,
+            Foreground = T2,
+            Opacity = 0.75,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 6, 0, 0),
+        });
+
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
+        var isolate = new Button
+        {
+            Content = "开启版本隔离",
+            Style = (Style)Application.Current.Resources["ChipButton"],
+            Padding = new Thickness(14, 6, 14, 6),
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        if (Application.Current.Resources["AccentChipBrush"] is Brush accent)
+            isolate.Background = accent;
+        System.Windows.Automation.AutomationProperties.SetName(isolate, "开启版本隔离");
+        isolate.Click += (_, _) => EnableVersionIsolation();
+        row.Children.Add(isolate);
+
+        var open = new Button
+        {
+            Content = "打开共用 mods",
+            Style = (Style)Application.Current.Resources["ChipButton"],
+            Padding = new Thickness(14, 6, 14, 6),
+        };
+        System.Windows.Automation.AutomationProperties.SetName(open, "打开共用 mods");
+        open.Click += (_, _) =>
+        {
+            try { System.Diagnostics.Process.Start("explorer.exe", "\"" + ModsDir() + "\""); }
+            catch (Exception ex) { Toast("打开失败:" + ex.Message); }
+        };
+        row.Children.Add(open);
+        host.Children.Add(row);
+        card.Child = host;
+        return card;
+    }
+
+    /// <summary>其它同样共用根目录的版本(用于判断一个模组是否只属于当前版本)。</summary>
+    private List<string> OtherSharedVersionIds()
+    {
+        var list = new List<string>();
+        try
+        {
+            var root = Path.GetFullPath(_gameRoot).TrimEnd(Path.DirectorySeparatorChar);
+            var versions = Path.Combine(_gameRoot, "versions");
+            if (!Directory.Exists(versions)) return list;
+            foreach (var dir in Directory.EnumerateDirectories(versions))
+            {
+                var id = Path.GetFileName(dir);
+                if (id.Equals(_versionId, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!File.Exists(Path.Combine(dir, id + ".json"))) continue;
+                var external = Path.GetFullPath(
+                    Fuse.Core.Versioning.InstanceLayout.ResolveExternal(_gameRoot, id))
+                    .TrimEnd(Path.DirectorySeparatorChar);
+                if (string.Equals(external, root, StringComparison.OrdinalIgnoreCase))
+                    list.Add(id);
+            }
+        }
+        catch (Exception)
+        {
+        }
+        return list;
+    }
+
+    private async void EnableVersionIsolation()
+    {
+        if (!SharedGameDirectory()) return;
+        if (LaunchState.IsBusy(_versionId))
+        {
+            Toast("游戏正在运行，先关掉游戏再迁移", _backupCard);
+            return;
+        }
+        var confirm = new ConfirmWindow("开启版本隔离",
+            "将为 " + _versionId + " 创建独立目录 versions\\" + _versionId + "：\n\n" +
+            "· 复制存档、配置、资源包、光影\n" +
+            "· 把明确只支持本版本的模组从共用 mods 移进去\n" +
+            "· 支持其它共用版本的模组留在原处\n\n" +
+            "之后 Fuse 启动这个版本只读独立目录；PCL 等外部启动器仍需要它自己的版本隔离设置。",
+            "开启隔离");
+        if (Show(confirm) != true) return;
+
+        Toast("正在迁移到独立目录…");
+        try
+        {
+            var result = await Task.Run(() => Fuse.Core.Installer.SharedInstanceMigrator.Enable(
+                _gameRoot, _versionId, _gameVersion, _loader, OtherSharedVersionIds()));
+            Toast("已开启隔离：移入 " + result.CopiedMods.Count + " 个模组，移出共用目录 " +
+                  result.MovedMods.Count + " 个；共用 mods 还剩 " + result.SharedModsRemaining + " 个");
+            RenderTab();
+        }
+        catch (Exception ex)
+        {
+            Toast("开启隔离失败:" + ex.Message);
+        }
+    }
+
     /// <summary>整合包实例进模组下载页时的提醒:避免用户随手加模组导致冲突。</summary>
     private Border BuildModpackModWarning()
     {
@@ -3524,6 +3650,8 @@ public class VersionDetailPanel : UserControl
         _browseCategories = isShader ? ShaderCategories : PackCategories;
         _browseDestDir = Path.Combine(InstDir(),
             isShader ? "shaderpacks" : "resourcepacks");
+        var sharedWarning = BuildSharedLayoutWarning();
+        if (sharedWarning != null) _content.Children.Add(sharedWarning);
 
         if (isShader)
         {
@@ -3982,6 +4110,7 @@ public class VersionDetailPanel : UserControl
             System.Windows.Automation.AutomationProperties.SetName(install, "一键安装配套前置");
             install.Click += (_, _) =>
             {
+                if (!ConfirmSharedContentWrite("光影前置")) return;
                 _shaderPrePending = true;
                 _ = InstallShaderPreRequisite();
                 RenderTab();
@@ -4558,10 +4687,24 @@ public class VersionDetailPanel : UserControl
         VerticalAlignment = VerticalAlignment.Center,
     };
 
+    private bool ConfirmSharedContentWrite(string title)
+    {
+        if (!SharedGameDirectory()) return true;
+        var kind = BrowseKind();
+        var dirName = kind == "mod" ? "mods" : kind == "shader" ? "shaderpacks" : "resourcepacks";
+        var confirm = new ConfirmWindow("共用目录",
+            "当前版本没有开启版本隔离。\n\n「" + title + "」会装进所有没开隔离的版本都会读取的共用 " +
+            dirName + " 目录，装错版本会让其它版本启动失败。\n\n" +
+            "建议先在页面顶部点「开启版本隔离」。",
+            "仍然安装", danger: true);
+        return Show(confirm) == true;
+    }
+
     private void DownloadItem(ModrinthHit hit, Button button)
     {
         var kind = BrowseKind();
         var destDir = DestDirForKind(kind);
+        if (!ConfirmSharedContentWrite(hit.Title)) return;
         if (_itemDownloads.ContainsKey(hit.ProjectId)) return;
         if (Fuse.Core.Sources.ContentRecordStore.IsInstalled(InstDir(), kind, hit.ProjectId, destDir))
             return;
