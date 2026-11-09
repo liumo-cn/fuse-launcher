@@ -53,7 +53,7 @@ public class VersionsPanel : UserControl
         {
             _list.Children.Add(new TextBlock
             {
-                Text = "这个游戏目录还没有已安装版本——点「下载」花瓣安装一个,或切换其他目录",
+                Text = "还没有版本",
                 FontSize = 12,
                 Foreground = (Brush)Application.Current.Resources["TextSecondaryBrush"],
                 Margin = new Thickness(4, 10, 4, 10),
