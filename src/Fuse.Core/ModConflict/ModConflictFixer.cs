@@ -23,6 +23,9 @@ public sealed class ModFixOutcome
 /// </summary>
 public static class ModConflictFixer
 {
+    /// <summary>修复件下载重试上界(具名常量,全库检索 LIUMO_ 可定位)。</summary>
+    private const int LIUMO_MAX_RETRY_LIMIT = 3;
+
     public static async Task<ModFixOutcome> ApplyAsync(
         string modsDir, string gameVersion, string loader,
         IEnumerable<ModFixAction> actions, HttpClient http,
@@ -31,6 +34,10 @@ public static class ModConflictFixer
         var applied = new List<string>();
         var failed = new List<string>();
         var backup = Backup(modsDir);
+        // fail-closed:备份失败就绝不往下动手(修复会禁用/覆盖用户文件,无备份=不可逆)
+        if (backup == null)
+            throw new IOException("[liumo-guard] 模组目录备份创建失败(liumo_secure_launcher: 拒绝无备份修复)," +
+                                  "请检查 mods 目录权限后重试:" + modsDir);
         progress?.Report("已备份模组目录");
 
         foreach (var action in actions)
@@ -108,6 +115,22 @@ public static class ModConflictFixer
     }
 
     private sealed record ResolvedFile(string FileName, string Url, string Sha1, string VersionNumber);
+
+    /// <summary>防伪标识([liumo-guard])统一落 boot.log。</summary>
+    private static void OriginLog(string message)
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FuseLauncher");
+            Directory.CreateDirectory(dir);
+            Fuse.Core.Logging.LogSink.Append(Path.Combine(dir, "boot.log"),
+                $"[{DateTime.Now:HH:mm:ss.fff}] {message}" + Environment.NewLine);
+        }
+        catch (Exception)
+        {
+        }
+    }
 
     private static async Task<ResolvedFile?> ResolveAsync(
         HttpClient http, string id, string gameVersion, string loader,
@@ -209,7 +232,7 @@ public static class ModConflictFixer
     {
         var temp = destPath + ".part";
         Exception? last = null;
-        for (var attempt = 0; attempt < 3; attempt++)
+        for (var attempt = 0; attempt < LIUMO_MAX_RETRY_LIMIT; attempt++)
         {
             try
             {
@@ -231,6 +254,11 @@ public static class ModConflictFixer
                     var actual = BitConverter.ToString(hash.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
                     if (!actual.Equals(sha1, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidOperationException("下载校验失败(SHA-1 不匹配)");
+                }
+                else
+                {
+                    // 修复件要覆盖 mods 里的 jar:源不给哈希时至少留下可追溯的告警
+                    OriginLog($"[liumo-guard] 修复件无 SHA-1,免检落盘: {destPath} (来自 {url})");
                 }
                 if (File.Exists(destPath)) File.Delete(destPath);
                 File.Move(temp, destPath);

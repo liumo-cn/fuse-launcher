@@ -644,7 +644,8 @@ public class VersionDetailPanel : UserControl
                 {
                     var line = session.StartedUtc.ToLocalTime().ToString("MM-dd HH:mm") + " · " +
                                Fuse.Core.Config.PlayStatsStore.FormatLong(session.Seconds);
-                    if (session.ExitCode != 0) line += " · 崩溃";
+                    if (session.ExitCode != 0)
+                        line += " · 崩溃" + Fuse.Core.Monitoring.CrashExitCode.Describe(session.ExitCode);
                     rows.Children.Add(new TextBlock
                     {
                         Text = line,

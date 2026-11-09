@@ -58,23 +58,45 @@ public static class MojangJavaRuntime
         return entries;
     }
 
-    /// <summary>挑选：优先 component 精确匹配（官方 javaVersion.component），其次主版本一致，回退更高版本。</summary>
+    /// <summary>版本名数值比较:把数字段逐个取出来比("17.0.10" > "17.0.9"、"8u421" > "8u51")。</summary>
+    private static int CompareVersionName(string? a, string? b)
+    {
+        var da = Digits(a); var db = Digits(b);
+        for (var i = 0; i < Math.Max(da.Count, db.Count); i++)
+        {
+            var x = i < da.Count ? da[i] : 0;
+            var y = i < db.Count ? db[i] : 0;
+            if (x != y) return x < y ? -1 : 1;
+        }
+        return string.CompareOrdinal(a ?? "", b ?? "");
+    }
+
+    private static List<long> Digits(string? s)
+    {
+        var list = new List<long>();
+        foreach (var seg in (s ?? "").Split('u', '.', '+', '-', '_'))
+            if (long.TryParse(seg, out var n)) list.Add(n);
+        return list;
+    }
+
+    /// <summary>挑选：优先 component 精确匹配（官方 javaVersion.component），其次主版本一致，回退更高版本。
+    /// 版本名按数值取最新,字符串序会拿 "8u51" 压过 "8u421"。</summary>
     public static JavaRuntimeEntry? Pick(IReadOnlyList<JavaRuntimeEntry> entries, string? component, int majorVersion)
     {
         if (!string.IsNullOrEmpty(component))
         {
             var exact = entries.Where(e => e.Component == component)
-                .OrderByDescending(e => e.VersionName)
+                .OrderByDescending(e => e.VersionName, Comparer<string>.Create(CompareVersionName))
                 .FirstOrDefault();
             if (exact != null) return exact;
         }
         var sameMajor = entries.Where(e => e.MajorVersion == majorVersion)
-            .OrderByDescending(e => e.VersionName)
+            .OrderByDescending(e => e.VersionName, Comparer<string>.Create(CompareVersionName))
             .FirstOrDefault();
         if (sameMajor != null) return sameMajor;
         return entries.Where(e => e.MajorVersion > majorVersion)
             .OrderBy(e => e.MajorVersion)
-            .ThenByDescending(e => e.VersionName)
+            .ThenByDescending(e => e.VersionName, Comparer<string>.Create(CompareVersionName))
             .FirstOrDefault();
     }
 
@@ -93,11 +115,16 @@ public static class MojangJavaRuntime
             if (entry?.Value<string>("type") != "file") continue;
             var raw = entry["downloads"]?["raw"] as JObject;
             if (raw == null) continue;
+            var sha1 = raw.Value<string>("sha1");
+            // 官方清单从不缺 sha1:缺了就是清单被篡改/损坏的信号,fail-closed 而不是静默免检
+            if (string.IsNullOrEmpty(sha1))
+                throw new InvalidOperationException(
+                    $"[liumo-guard] 运行时清单条目缺少 sha1,拒绝下载: {prop.Name}");
             items.Add(new FileDownloadItem
             {
                 Url = raw.Value<string>("url") ?? "",
-                DestPath = Path.Combine(destDir, prop.Name.Replace('/', Path.DirectorySeparatorChar)),
-                ExpectedHash = raw.Value<string>("sha1"),
+                DestPath = Download.SafeExtractor.SafeTarget(destDir, prop.Name),
+                ExpectedHash = sha1,
                 Algo = HashAlgo.Sha1,
             });
         }

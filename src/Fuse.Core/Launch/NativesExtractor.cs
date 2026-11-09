@@ -48,15 +48,20 @@ public static class NativesExtractor
             foreach (var entry in archive.Entries)
             {
                 if (!entry.FullName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) continue;
-                var destPath = Path.Combine(nativesDirectory, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
+                // natives jar 名字同样不可信:走统一防护(官方库正常无越界,防的是被换掉的 jar)
+                var destPath = Download.SafeExtractor.SafeTarget(nativesDirectory, entry.FullName);
                 var destDir = Path.GetDirectoryName(destPath);
                 if (!string.IsNullOrEmpty(destDir)) Directory.CreateDirectory(destDir);
 
                 if (File.Exists(destPath) && new FileInfo(destPath).Length == entry.Length)
                     continue; // 已存在且尺寸一致，跳过
-                using var source = entry.Open();
-                using var target = File.Create(destPath);
-                source.CopyTo(target);
+                // 先写临时文件再替换:中途取消/崩溃不会留下半截 dll,游戏加载必然失败
+                var tmpPath = destPath + ".tmp";
+                using (var source = entry.Open())
+                using (var target = File.Create(tmpPath))
+                    source.CopyTo(target);
+                if (File.Exists(destPath)) File.Delete(destPath);
+                File.Move(tmpPath, destPath);
                 extracted.Add(destPath);
             }
         }

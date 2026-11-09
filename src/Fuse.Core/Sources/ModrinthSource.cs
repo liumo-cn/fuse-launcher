@@ -227,6 +227,25 @@ public static class ModrinthSource
             ? $"没有适配 {gameVersion} 的版本"
             : $"该模组没有适配 {gameVersion}（{loader}）的版本");
 
+    /// <summary>按项目 id 查 slug(前置"同 id 已装"判定用:jar 里的 mod id 通常等于 slug)。</summary>
+    public static async Task<string?> GetProjectSlugAsync(
+        HttpClient http, string projectId, CancellationToken ct)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/project/{projectId}");
+            request.Headers.UserAgent.ParseAdd("FuseLauncher/1.0.0 Java/17.0.15 (Windows 10; x64; minecraft launcher)");
+            using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode) return null;
+            var json = JObject.Parse(await response.Content.ReadAsStringAsync().ConfigureAwait(false));
+            return json.Value<string>("slug");
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return null; // slug 拿不到就退回纯文件名判定,不影响安装
+        }
+    }
+
     /// <summary>查询 /project/{id}/version,返回原始 JSON 条目(版本组展开 + 加载器过滤)。</summary>
     private static async Task<List<JObject>> QueryVersionObjectsAsync(
         HttpClient http, string projectId, string gameVersion, string loader, CancellationToken ct)

@@ -16,6 +16,8 @@ public sealed class JavaRuntime
     public string VersionString { get; init; } = "";
     public int MajorVersion { get; init; }
     public string Source { get; init; } = "";
+    /// <summary>JVM 位数(读 PE 头);32 位 JVM 拿大 -Xmx 会直接启动失败,内存钳制要用。</summary>
+    public bool Is64Bit { get; init; } = true;
 }
 
 /// <summary>
@@ -31,8 +33,11 @@ public static class JavaLocator
         var javaHome = Environment.GetEnvironmentVariable("JAVA_HOME");
         if (!string.IsNullOrEmpty(javaHome)) homes.Add((javaHome, "JAVA_HOME"));
 
-        homes.AddRange(FromRegistry(Registry.LocalMachine, @"SOFTWARE\JavaSoft\JDK", "注册表 JDK"));
-        homes.AddRange(FromRegistry(Registry.LocalMachine, @"SOFTWARE\JavaSoft\Java Runtime Environment", "注册表 JRE"));
+        homes.AddRange(FromRegistry(Registry.LocalMachine, @"SOFTWARE\JavaSoft\JDK", "注册表 JDK", RegistryView.Default));
+        homes.AddRange(FromRegistry(Registry.LocalMachine, @"SOFTWARE\JavaSoft\Java Runtime Environment", "注册表 JRE", RegistryView.Default));
+        // 64 位进程默认只看得到 64 位注册表视图;32 位 JDK 注册在 Wow6432Node 下,单独开视图扫一遍
+        homes.AddRange(FromRegistry(Registry.LocalMachine, @"SOFTWARE\JavaSoft\JDK", "注册表 JDK(32位)", RegistryView.Registry32));
+        homes.AddRange(FromRegistry(Registry.LocalMachine, @"SOFTWARE\JavaSoft\Java Runtime Environment", "注册表 JRE(32位)", RegistryView.Registry32));
 
         var roots = new[]
         {
@@ -64,6 +69,7 @@ public static class JavaLocator
                 VersionString = ver,
                 MajorVersion = ParseMajor(ver),
                 Source = source,
+                Is64Bit = Is64BitJava(Path.Combine(full, "bin", "java.exe")),
             });
         }
         return runtimes
@@ -114,9 +120,9 @@ public static class JavaLocator
         var parts = version.Split('.', '_');
         if (parts.Length > 0 && parts[0] == "1" && parts.Length > 1 && int.TryParse(parts[1], out var legacy))
             return legacy;
-        // Mojang 的 Java 8 运行时版本号是 "8u51-cacert462b08" 这种形式
+        // Mojang 的 Java 8 运行时版本号是 "8u51-cacert462b08" 这种形式(u 大小写都认)
         var head = parts[0];
-        var u = head.IndexOf('u');
+        var u = head.IndexOf("u", StringComparison.OrdinalIgnoreCase);
         if (u > 0 && int.TryParse(head.Substring(0, u), out var oldStyle))
             return oldStyle;
         return int.TryParse(head, out var major) ? major : 0;
@@ -162,17 +168,22 @@ public static class JavaLocator
                 VersionString = versionString,
                 MajorVersion = major,
                 Source = "Mojang java-runtime",
+                Is64Bit = Is64BitJava(Path.Combine(dir, "bin", "java.exe")),
             });
         }
         return result;
     }
 
-    private static IEnumerable<(string Home, string Source)> FromRegistry(RegistryKey root, string keyPath, string source)
+    private static IEnumerable<(string Home, string Source)> FromRegistry(
+        RegistryKey root, string keyPath, string source, RegistryView view)
     {
         var found = new List<(string Home, string Source)>();
         try
         {
-            using var key = root.OpenSubKey(keyPath);
+            var baseKey = view == RegistryView.Default
+                ? root
+                : RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+            using var key = baseKey.OpenSubKey(keyPath);
             if (key != null)
             {
                 foreach (var sub in key.GetSubKeyNames())
@@ -182,6 +193,7 @@ public static class JavaLocator
                     if (!string.IsNullOrEmpty(home)) found.Add((home!, source));
                 }
             }
+            if (baseKey != root) baseKey.Dispose();
         }
         catch (System.Security.SecurityException)
         {
@@ -189,7 +201,32 @@ public static class JavaLocator
         catch (IOException)
         {
         }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            // 32 位视图在某些精简系统上不存在
+        }
         return found;
+    }
+
+    /// <summary>@author liumo | Original Algorithm — 读 PE 头 Machine 字段判 JVM 位数,
+    /// 不依赖目录名、注册表视图或 WMI:0x014C=x86、0x8664=x64、0xAA64=ARM64。</summary>
+    public static bool Is64BitJava(string javaExe)
+    {
+        try
+        {
+            using var fs = File.OpenRead(javaExe);
+            using var br = new System.IO.BinaryReader(fs);
+            fs.Seek(0x3C, SeekOrigin.Begin);
+            fs.Seek(br.ReadInt32(), SeekOrigin.Begin);            // e_lfanew → PE 签名处
+            if (br.ReadUInt32() != 0x00004550) return true;       // 不是 PE,按 64 位放行不误杀
+            var machine = br.ReadUInt16();                        // COFF 头第一个字段就是 Machine
+            return machine != 0x014C;                             // 只有 i386 当 32 位
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                   or System.Security.SecurityException)
+        {
+            return true;
+        }
     }
 
     private static string ReadVersionFromReleaseFile(string home)

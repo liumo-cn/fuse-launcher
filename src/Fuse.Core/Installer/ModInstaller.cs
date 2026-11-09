@@ -62,6 +62,11 @@ public static class ModInstaller
     {
         var plan = new ModInstallPlan();
 
+        // 扫一遍 mods 里已有的 mod id:前置"存在性"不能只看文件名——
+        // 已装的同 id 前置换了文件名时,按文件名判会再下一份,制造重复 mod id 游戏起不来
+        var installedIds = CollectInstalledIds(modsDir, loader);
+        var slugCache = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         // 2. 前置检测(required 依赖逐个解析)
         var pending = new Queue<ModrinthDependency>(modFile.RequiredDeps);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { projectId };
@@ -97,6 +102,9 @@ public static class ModInstaller
             var alreadyThere = File.Exists(dest) &&
                 await Download.Hashing.VerifyFileAsync(dest, depFile.Sha1, HashAlgo.Sha1, cancellation)
                     .ConfigureAwait(false);
+            if (!alreadyThere)
+                alreadyThere = await IsInstalledByIdAsync(http, depId, installedIds, slugCache, cancellation)
+                    .ConfigureAwait(false);
 
             if (alreadyThere)
                 plan.AlreadyPresent.Add(depFile.FileName);
@@ -113,7 +121,8 @@ public static class ModInstaller
                 if (!visited.Contains(d.ProjectId)) pending.Enqueue(d);
         }
 
-        // 3. 本体(已有同名同哈希则跳过)
+        // 3. 本体(已有同名同哈希则跳过)。本体不做按 id 判定:上层按钮状态机以"有下载任务"
+        //    驱动,这里多跳一层会让按钮停在错误状态;重复 id 由冲突分析器兜底。
         plan.MainFileName = modFile.FileName;
         var modDest = Path.Combine(modsDir, modFile.FileName);
         var modExists = File.Exists(modDest) &&
@@ -130,5 +139,37 @@ public static class ModInstaller
             plan.AlreadyPresent.Add(modFile.FileName);
 
         return plan;
+    }
+
+    /// <summary>mods 目录里已有的 mod id / provides 集合(坏 jar 跳过,静默)。</summary>
+    private static HashSet<string> CollectInstalledIds(string modsDir, string loader)
+    {
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var mod in ModConflict.ModScanner.Scan(modsDir, loader))
+            {
+                if (!string.IsNullOrEmpty(mod.Id)) ids.Add(mod.Id);
+            }
+        }
+        catch (Exception)
+        {
+            // 扫不出来就退回纯文件名判定
+        }
+        return ids;
+    }
+
+    /// <summary>依赖项目 id → Modrinth slug(通常等于 jar 内 mod id)→ 与已装 id 比对。</summary>
+    private static async Task<bool> IsInstalledByIdAsync(
+        HttpClient http, string depProjectId, HashSet<string> installedIds,
+        Dictionary<string, string> slugCache, CancellationToken ct)
+    {
+        if (installedIds.Count == 0) return false;
+        if (!slugCache.TryGetValue(depProjectId, out var slug))
+        {
+            slug = await ModrinthSource.GetProjectSlugAsync(http, depProjectId, ct).ConfigureAwait(false) ?? "";
+            slugCache[depProjectId] = slug;
+        }
+        return !string.IsNullOrEmpty(slug) && installedIds.Contains(slug);
     }
 }

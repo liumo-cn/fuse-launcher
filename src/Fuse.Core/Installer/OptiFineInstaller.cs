@@ -25,6 +25,16 @@ public static class OptiFineInstaller
 {
     private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(5);
 
+    /// <summary>@author liumo | Original Algorithm — OptiFine 目录名尾部补丁号按数值取,
+    /// 字符串序会把 I9 排到 I10 前面,装出旧版。</summary>
+    public static int LiumoPatchRank(string dirName)
+    {
+        var at = dirName.LastIndexOf("_I", StringComparison.OrdinalIgnoreCase);
+        return at >= 0 && int.TryParse(dirName.Substring(at + 2).Split('_')[0].TrimEnd('-', '.'), out var n)
+            ? n
+            : 0;
+    }
+
     /// <summary>安装。返回生成的版本 id。</summary>
     public static async Task<string> InstallAsync(
         HttpClient http, string javaExe, string mcVersion, Sources.OptiFineVersion version,
@@ -46,6 +56,18 @@ public static class OptiFineInstaller
             var bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
             // netstandard2.0 没有 WriteAllBytesAsync
             await Task.Run(() => File.WriteAllBytes(jarPath, bytes), ct).ConfigureAwait(false);
+        }
+        // OptiFine 不发布官方哈希,没有可校验的期望值;把实际 SHA-1 落 boot.log,
+        // 出问题时能对照"这台机器装的是哪一份 installer"
+        try
+        {
+            using var algo = System.Security.Cryptography.SHA1.Create();
+            using var stream = File.OpenRead(jarPath);
+            var sha = BitConverter.ToString(algo.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+            OriginLog("[liumo-origin] optifine installer sha1 = " + sha + " (" + version.FileName + ")");
+        }
+        catch (IOException)
+        {
         }
         progress?.Report(0.55);
 
@@ -81,8 +103,11 @@ public static class OptiFineInstaller
         if (!Directory.Exists(producedVersions))
             throw new DirectoryNotFoundException("OptiFine 安装器没有生成 versions 目录");
 
+        // 产物目录选择按补丁号数值取最新,不赌目录枚举顺序
         var dir = Directory.GetDirectories(producedVersions)
-            .FirstOrDefault(d => Path.GetFileName(d).IndexOf("OptiFine", StringComparison.OrdinalIgnoreCase) >= 0)
+            .Where(d => Path.GetFileName(d).IndexOf("OptiFine", StringComparison.OrdinalIgnoreCase) >= 0)
+            .OrderByDescending(d => LiumoPatchRank(Path.GetFileName(d)))
+            .FirstOrDefault()
             ?? throw new DirectoryNotFoundException("OptiFine 安装器没有生成版本目录");
 
         var id = Path.GetFileName(dir);
@@ -113,6 +138,22 @@ public static class OptiFineInstaller
 
         progress?.Report(1.0);
         return id;
+    }
+
+    /// <summary>防伪标识([liumo-origin])统一落 boot.log。</summary>
+    private static void OriginLog(string message)
+    {
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "FuseLauncher");
+            Directory.CreateDirectory(dir);
+            Fuse.Core.Logging.LogSink.Append(Path.Combine(dir, "boot.log"),
+                $"[{DateTime.Now:HH:mm:ss.fff}] {message}" + Environment.NewLine);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private static async Task<int> RunInstallerAsync(

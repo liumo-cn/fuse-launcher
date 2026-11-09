@@ -719,56 +719,68 @@ public sealed class DownloadQueue
                         : meta.InstanceDir!;
                     Directory.CreateDirectory(gameDir);
 
-                    // 3. 原版底座(缺则装;占 5~38%)。版本 json 的 url/sha1 必须先从官方清单解析,
-                    //    否则 VanillaInstallCoreAsync 拿到空地址直接失败。
-                    var vanillaJson = Path.Combine(meta.VersionsRoot!, gv, gv + ".json");
-                    if (!File.Exists(vanillaJson))
-                    {
-                        var manifest = await Sources.MojangSource.FetchManifestAsync(_http, cancellation)
-                            .ConfigureAwait(false);
-                        var entry = manifest.FirstOrDefault(v =>
-                            string.Equals(v.Id, gv, StringComparison.Ordinal))
-                            ?? throw new InvalidOperationException($"官方清单里没有版本 {gv}");
-                        await VanillaInstallCoreAsync(
-                            new DownloadTaskRecord { Name = gv, SourceUrl = entry.Url, ExpectedHash = entry.Sha1 },
-                            new VanillaInstallMeta
-                            {
-                                VersionId = gv,
-                                VersionsRoot = meta.VersionsRoot,
-                                LibrariesRoot = meta.LibrariesRoot,
-                                AssetsRoot = meta.AssetsRoot,
-                                GameDirectory = Path.Combine(meta.InstancesRoot!, gv),
-                            },
-                            meta.VersionsRoot!, ToScaled(progress, 0.05, 0.33), cancellation).ConfigureAwait(false);
-                    }
-
-                    // 4. 加载器(38~58%);quilt 暂不支持
+                    // 底座与加载器写 versions/<gv>/<gv>.json 与共享 libraries:必须和并行的
+                    // 独立 vanilla/fabric/forge 任务共用同一把版本锁。modpack 自己持的
+                    // LockFor(packVersionId) 罩不到这些文件,不互斥会撞出"正由另一进程使用"。
+                    var gvGate = LockFor(gv);
+                    await gvGate.WaitAsync(cancellation).ConfigureAwait(false);
                     var inheritsFrom = gv;
-                    Trace("modpack " + packVersionId + ": vanilla ready, installing loader");
-                    if (index.LoaderType == "fabric")
+                    try
                     {
-                        await Installer.FabricInstaller.InstallAsync(_http, gv, index.LoaderVersion!,
-                            meta.VersionsRoot!, meta.LibrariesRoot!, meta.AssetsRoot!,
-                            Path.Combine(meta.InstancesRoot!, gv),
-                            ToScaled(progress, 0.38, 0.20), cancellation).ConfigureAwait(false);
-                        inheritsFrom = $"{gv}-fabric-{index.LoaderVersion}";
+                        // 3. 原版底座(缺则装;占 5~38%)。版本 json 的 url/sha1 必须先从官方清单解析,
+                        //    否则 VanillaInstallCoreAsync 拿到空地址直接失败。
+                        var vanillaJson = Path.Combine(meta.VersionsRoot!, gv, gv + ".json");
+                        if (!File.Exists(vanillaJson))
+                        {
+                            var manifest = await Sources.MojangSource.FetchManifestAsync(_http, cancellation)
+                                .ConfigureAwait(false);
+                            var entry = manifest.FirstOrDefault(v =>
+                                string.Equals(v.Id, gv, StringComparison.Ordinal))
+                                ?? throw new InvalidOperationException($"官方清单里没有版本 {gv}");
+                            await VanillaInstallCoreAsync(
+                                new DownloadTaskRecord { Name = gv, SourceUrl = entry.Url, ExpectedHash = entry.Sha1 },
+                                new VanillaInstallMeta
+                                {
+                                    VersionId = gv,
+                                    VersionsRoot = meta.VersionsRoot,
+                                    LibrariesRoot = meta.LibrariesRoot,
+                                    AssetsRoot = meta.AssetsRoot,
+                                    GameDirectory = Path.Combine(meta.InstancesRoot!, gv),
+                                },
+                                meta.VersionsRoot!, ToScaled(progress, 0.05, 0.33), cancellation).ConfigureAwait(false);
+                        }
+
+                        // 4. 加载器(38~58%);quilt 暂不支持
+                        Trace("modpack " + packVersionId + ": vanilla ready, installing loader");
+                        if (index.LoaderType == "fabric")
+                        {
+                            await Installer.FabricInstaller.InstallAsync(_http, gv, index.LoaderVersion!,
+                                meta.VersionsRoot!, meta.LibrariesRoot!, meta.AssetsRoot!,
+                                Path.Combine(meta.InstancesRoot!, gv),
+                                ToScaled(progress, 0.38, 0.20), cancellation).ConfigureAwait(false);
+                            inheritsFrom = $"{gv}-fabric-{index.LoaderVersion}";
+                        }
+                        else if (index.LoaderType is "forge" or "neoforge")
+                        {
+                            var flavor = index.LoaderType == "forge"
+                                ? Installer.ModLoaderInstaller.Forge
+                                : Installer.ModLoaderInstaller.NeoForge;
+                            var javaExe = await EnsureJavaForAsync(
+                                meta.VersionsRoot!, gv, ToScaled(progress, 0.38, 0.08), cancellation).ConfigureAwait(false);
+                            await Installer.ModLoaderInstaller.InstallAsync(_http, flavor, gv, index.LoaderVersion!,
+                                meta.VersionsRoot!, meta.LibrariesRoot!, javaExe,
+                                Path.Combine(tempRoot, "loader"), ToScaled(progress, 0.46, 0.12), cancellation)
+                                .ConfigureAwait(false);
+                            inheritsFrom = $"{gv}-{flavor.Key}-{index.LoaderVersion}";
+                        }
+                        else if (index.LoaderType == "quilt")
+                        {
+                            throw new InvalidOperationException("该整合包使用 Quilt 加载器,暂不支持;请选 Fabric / Forge / NeoForge 整合包");
+                        }
                     }
-                    else if (index.LoaderType is "forge" or "neoforge")
+                    finally
                     {
-                        var flavor = index.LoaderType == "forge"
-                            ? Installer.ModLoaderInstaller.Forge
-                            : Installer.ModLoaderInstaller.NeoForge;
-                        var javaExe = await EnsureJavaForAsync(
-                            meta.VersionsRoot!, gv, ToScaled(progress, 0.38, 0.08), cancellation).ConfigureAwait(false);
-                        await Installer.ModLoaderInstaller.InstallAsync(_http, flavor, gv, index.LoaderVersion!,
-                            meta.VersionsRoot!, meta.LibrariesRoot!, javaExe,
-                            Path.Combine(tempRoot, "loader"), ToScaled(progress, 0.46, 0.12), cancellation)
-                            .ConfigureAwait(false);
-                        inheritsFrom = $"{gv}-{flavor.Key}-{index.LoaderVersion}";
-                    }
-                    else if (index.LoaderType == "quilt")
-                    {
-                        throw new InvalidOperationException("该整合包使用 Quilt 加载器,暂不支持;请选 Fabric / Forge / NeoForge 整合包");
+                        gvGate.Release();
                     }
 
                     // 5. 写整合包版本 json(inheritsFrom 沿加载器版,递归合并到原版)

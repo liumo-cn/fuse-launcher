@@ -108,8 +108,10 @@ public static class AppLauncher
                             }
 
                             status("正在修复模组冲突…");
+                            // 修复解析必须与分析用同一个 loader:传空串会让 Modrinth 查询
+                            // 丢失 loaders facet,Fabric/Forge 版本混着挑,可能装错加载器的前置
                             var outcome = await Fuse.Core.ModConflict.ModConflictFixer.ApplyAsync(
-                                modsDir, gameVersion, "", dialog.Selected, AppServices.Http,
+                                modsDir, gameVersion, loader, dialog.Selected, AppServices.Http,
                                 new Progress<string>(msg => status(msg)), System.Threading.CancellationToken.None);
                             if (outcome.Failed.Count > 0)
                             {

@@ -56,10 +56,11 @@ public static class OptiFineAssembler
     {
         var root = Path.Combine(librariesRoot, "optifine", "OptiFine");
         if (!Directory.Exists(root)) return null;
-        // 版本目录名形如 1.19.4_HD_U_I4:按 MC 版本前缀匹配,取最新(字符串序最后)
+        // 版本目录名形如 1.19.4_HD_U_I4:按 MC 版本前缀匹配,补丁号按数值取最新
+        // (字符串序 I9 会排在 I10 前面,装出旧版)
         return Directory.EnumerateDirectories(root)
             .Where(d => Path.GetFileName(d).StartsWith(mcVersion, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(d => OptiFineInstaller.LiumoPatchRank(Path.GetFileName(d)))
             .SelectMany(d => Directory.EnumerateFiles(d, "*.jar"))
             .FirstOrDefault();
     }

@@ -104,6 +104,10 @@ public static class ModpackInstaller
         var p = raw.Replace('\\', '/').TrimStart('/');
         if (p.Split('/').Any(seg => seg == ".." || seg == "."))
             throw new InvalidOperationException("整合包含有非法路径:" + raw);
+        // 盘符(C:/mods/x.jar)不在 .. 检查范围内,但 Path.Combine 遇到 rooted 路径会整个替换,
+        // 不拦的话索引里一条盘符路径就能把文件写进实例目录之外
+        if (p.Length >= 2 && p[1] == ':' || p.StartsWith("/"))
+            throw new InvalidOperationException("liumo_secure_launcher: 整合包文件路径含盘符/绝对路径,已拒绝:" + raw);
         return p;
     }
 
@@ -120,8 +124,9 @@ public static class ModpackInstaller
         {
             ct.ThrowIfCancellationRequested();
             if (string.IsNullOrEmpty(entry.Name)) continue;
-            var target = Path.Combine(extractDir, entry.FullName.Replace('/', Path.DirectorySeparatorChar));
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
+            // 条目名不可信:统一走 SafeExtractor 前缀复核,.. /盘符/绝对路径全部拒绝(zip-slip)
+            var target = Download.SafeExtractor.SafeTarget(extractDir, entry.FullName);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             entry.ExtractToFile(target, overwrite: true);
         }
     }
