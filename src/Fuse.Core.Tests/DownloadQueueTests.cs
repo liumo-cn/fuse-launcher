@@ -125,7 +125,15 @@ public class DownloadQueueTests
             var queue = new DownloadQueue(store, executor, maxConcurrent: 2);
 
             for (var i = 0; i < 5; i++)
-                queue.Enqueue(new DownloadTaskRecord { Name = "t" + i });
+            {
+                queue.Enqueue(new DownloadTaskRecord
+                {
+                    Name = "t" + i,
+                    Kind = "file",
+                    SourceUrl = "http://x/" + i,
+                    DestPath = Path.Combine(dir, i + ".bin"),
+                });
+            }
 
             // 等待调度稳定
             await Task.Delay(400);
@@ -225,6 +233,87 @@ public class DownloadQueueTests
             executor.Release.TrySetResult(true);
             await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Paused);
             Assert.False(store.Get(task.TaskId)!.Pausing);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>同一个下载点两次只排一个任务;暂停中的再点一次等于继续。</summary>
+    [Fact]
+    public async Task DuplicateEnqueue_ReusesExistingTask()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcdl-q5-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var store = new DownloadTaskStore(Path.Combine(dir, "tasks.json"));
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var executor = new FakeExecutor(gate);
+            var queue = new DownloadQueue(store, executor, maxConcurrent: 2);
+
+            DownloadTaskRecord Make() => new()
+            {
+                Name = "同一个文件",
+                Kind = "file",
+                SourceUrl = "https://example.com/a.jar",
+                DestPath = Path.Combine(dir, "a.jar"),
+            };
+
+            var first = queue.Enqueue(Make());
+            await WaitForStatusAsync(store, first.TaskId, DownloadTaskStatus.Downloading);
+            var second = queue.Enqueue(Make());
+
+            Assert.Equal(first.TaskId, second.TaskId);
+            Assert.Single(store.GetAll());
+
+            // 暂停后重复点下载 = 继续同一个任务,不新增
+            queue.Pause(first.TaskId);
+            await WaitForStatusAsync(store, first.TaskId, DownloadTaskStatus.Paused);
+            var resumed = queue.Enqueue(Make());
+            Assert.Equal(first.TaskId, resumed.TaskId);
+            Assert.Single(store.GetAll());
+            await WaitForStatusAsync(store, first.TaskId, DownloadTaskStatus.Downloading);
+
+            gate.TrySetResult(true);
+            await WaitForStatusAsync(store, first.TaskId, DownloadTaskStatus.Completed);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
+    [Fact]
+    public async Task DifferentDownloads_AreNotDeduplicated()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcdl-q6-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var store = new DownloadTaskStore(Path.Combine(dir, "tasks.json"));
+            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var executor = new FakeExecutor(gate);
+            var queue = new DownloadQueue(store, executor, maxConcurrent: 3);
+
+            var a = queue.Enqueue(new DownloadTaskRecord
+            {
+                Name = "a", Kind = "file",
+                SourceUrl = "https://example.com/a.jar", DestPath = Path.Combine(dir, "a.jar"),
+            });
+            var b = queue.Enqueue(new DownloadTaskRecord
+            {
+                Name = "b", Kind = "file",
+                SourceUrl = "https://example.com/b.jar", DestPath = Path.Combine(dir, "b.jar"),
+            });
+
+            Assert.NotEqual(a.TaskId, b.TaskId);
+            Assert.Equal(2, store.GetAll().Count);
+
+            gate.TrySetResult(true);
+            await WaitForStatusAsync(store, a.TaskId, DownloadTaskStatus.Completed);
+            await WaitForStatusAsync(store, b.TaskId, DownloadTaskStatus.Completed);
         }
         finally
         {

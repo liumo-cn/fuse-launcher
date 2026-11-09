@@ -43,6 +43,9 @@ public sealed class ChunkedDownloadResult
 /// </summary>
 public sealed class ChunkedDownloader(HttpClient http)
 {
+    /// <summary>单块/单流的硬超时:连接建立后服务端不再发数据时,必须能真的掐断。</summary>
+    private static readonly TimeSpan StreamTimeout = TimeSpan.FromSeconds(120);
+
     public async Task<ChunkedDownloadResult> DownloadAsync(
         string url,
         string destPath,
@@ -327,7 +330,7 @@ public sealed class ChunkedDownloader(HttpClient http)
             {
                 // 单块超时:防止连接建立后服务端不再发数据,流读取永远挂住(实测 Mojang 分块偶发)
                 using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                chunkCts.CancelAfter(TimeSpan.FromSeconds(120));
+                chunkCts.CancelAfter(StreamTimeout);
                 var chunkToken = chunkCts.Token;
 
                 // Balanced:首次官方,失败后转镜像(熔断期内恒官方)
@@ -344,11 +347,12 @@ public sealed class ChunkedDownloader(HttpClient http)
                 }
                 response.EnsureSuccessStatusCode();
 
-                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
                 using var target = new FileStream(partPath, FileMode.Open, FileAccess.Write, FileShare.Read,
                     64 * 1024, useAsync: true);
                 target.Seek(chunk.Offset, SeekOrigin.Begin);
-                await stream.CopyToAsync(target, 64 * 1024, chunkToken).ConfigureAwait(false);
+                // token 在 net48 里打断不了挂起的 body 读取,交给 HttpBody 用 Dispose 掐连接
+                await HttpBody.CopyToAsync(response, target, StreamTimeout, ct, attemptToken: chunkToken)
+                    .ConfigureAwait(false);
 
                 var written = target.Position - chunk.Offset;
                 if (written != chunk.Length)
@@ -378,25 +382,18 @@ public sealed class ChunkedDownloader(HttpClient http)
         using var response = await http.GetAsync(UrlMirror.ForAttempt(url, sourceOffset), HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var total = response.Content.Headers.ContentLength ?? -1;
-        using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
         // 256KB 缓冲:单流回退时 64KB 缓冲在高带宽链路上会成为 CPU 拷贝瓶颈
         using var target = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, 256 * 1024, useAsync: true);
-        var buffer = new byte[256 * 1024];
-        long done = 0;
-        int read;
         var lastReport = DateTime.MinValue;
-        while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false)) > 0)
+        // 一路没有新数据就掐连接,别让"单流回退"变成永久挂起
+        await HttpBody.CopyToAsync(response, target, StreamTimeout, ct, 256 * 1024, onCopied: done =>
         {
-            await target.WriteAsync(buffer, 0, read, ct).ConfigureAwait(false);
-            done += read;
             // 高速链路上每秒报告一次即可:每次 Report 都跨线程投递,高频投递会拖慢拷贝循环
             var now = DateTime.UtcNow;
-            if (total > 0 && (now - lastReport).TotalMilliseconds >= 250)
-            {
-                lastReport = now;
-                progress?.Report(done / (double)total);
-            }
-        }
+            if (total <= 0 || (now - lastReport).TotalMilliseconds < 250) return;
+            lastReport = now;
+            progress?.Report(done / (double)total);
+        }).ConfigureAwait(false);
         if (total > 0) progress?.Report(1.0);
     }
 

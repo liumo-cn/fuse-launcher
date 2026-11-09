@@ -131,13 +131,13 @@ public static class MojangSource
         response.EnsureSuccessStatusCode();
         // 先写 .tmp 再原子替换:别的任务可能同时在读这个 json(见加载器安装的并发场景)
         var tmpPath = destPath + ".tmp";
-        using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
         using (var target = File.Create(tmpPath))
         {
-            // 响应体也要有上限:慢速涓流时 CopyToAsync 只受 HttpClient 默认超时(100s)约束
+            // 45 秒硬预算:net48 里 token 打断不了挂起的 body 读取,交给 HttpBody 掐连接
             using var bodyCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             bodyCts.CancelAfter(TimeSpan.FromSeconds(45));
-            await stream.CopyToAsync(target, 64 * 1024, bodyCts.Token).ConfigureAwait(false);
+            await Download.HttpBody.CopyToAsync(response, target, TimeSpan.FromSeconds(45), ct,
+                attemptToken: bodyCts.Token).ConfigureAwait(false);
         }
         if (File.Exists(destPath)) File.Delete(destPath);
         File.Move(tmpPath, destPath);

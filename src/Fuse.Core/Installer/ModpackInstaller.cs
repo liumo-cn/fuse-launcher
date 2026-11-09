@@ -25,7 +25,7 @@ public static class ModpackInstaller
         string? LoaderVersion,
         List<ModpackFile> Files);
 
-    public sealed record ModpackFile(string RelativePath, string Url, string? Sha1);
+    public sealed record ModpackFile(string RelativePath, string Url, string? Sha1, long Size = 0);
 
     /// <summary>作者禁止第三方 API 下载、需要用户手动补的文件。</summary>
     public sealed record MissingModFile(string FileName, int ProjectId, int FileId, string? Sha1);
@@ -68,7 +68,8 @@ public static class ModpackInstaller
             var envClient = f["env"]?.Value<string>("client") ?? "required";
             if (envClient == "unsupported") continue;
             var sha1 = f["hashes"]?.Value<string>("sha1");
-            files.Add(new ModpackFile(NormalizePath(path!), url!, sha1));
+            files.Add(new ModpackFile(NormalizePath(path!), url!, sha1,
+                f.Value<long?>("fileSize") ?? 0));
         }
 
         return new ModpackIndex(gameVersion, loaderType, loaderVersion, files);

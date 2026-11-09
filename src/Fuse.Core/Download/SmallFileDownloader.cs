@@ -18,6 +18,9 @@ public sealed class FileDownloadItem
     public string? ExpectedHash { get; init; }
     public HashAlgo Algo { get; init; } = HashAlgo.Sha1;
 
+    /// <summary>文件大小（字节，0 = 未知）。已知时进度按字节算，否则退回按个数。</summary>
+    public long Size { get; init; }
+
     /// <summary>
     /// 可缺省:下载失败不算整批失败(例如 Forge 老版本 version.json 里 url 为空、
     /// 但其实是 processors 生成的 jar,镜像上 404 属正常)。
@@ -59,16 +62,69 @@ public sealed class SmallFileDownloader(HttpClient http)
     {
         var opts = options ?? new SmallFileOptions();
         var list = items as IList<FileDownloadItem> ?? items.ToList();
+        if (list.Count == 0) return new SmallFileBatchResult();
+
+        // 预扫:只有真正要下载的文件才计入进度。已是最新、或能从共享缓存补上的先剔掉,
+        // 否则重装时几个秒过的文件就能把进度条推到 90%,真正的大文件还没开始下。
+        var upToDate = new bool[list.Count];
+        var scanSlots = new ConcurrentQueue<int>(Enumerable.Range(0, list.Count));
+        var scanLeft = list.Count;
+        var scanWorkers = Enumerable.Range(0, Math.Max(1, Math.Min(opts.InitialParallelism, list.Count)))
+            .Select(_ => Task.Run(async () =>
+            {
+                while (true)
+                {
+                    cancellation.ThrowIfCancellationRequested();
+                    if (!scanSlots.TryDequeue(out var index))
+                    {
+                        if (Volatile.Read(ref scanLeft) == 0) return;
+                        await Task.Delay(10, cancellation).ConfigureAwait(false);
+                        continue;
+                    }
+                    try
+                    {
+                        upToDate[index] = await IsUpToDateAsync(list[index], cancellation).ConfigureAwait(false);
+                    }
+                    // 读不了/被占用当作需要下载,交给下载线程按正常流程报错
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception)
+                    {
+                        upToDate[index] = false;
+                    }
+                    finally
+                    {
+                        Interlocked.Decrement(ref scanLeft);
+                    }
+                }
+            }, cancellation)).ToArray();
+        await Task.WhenAll(scanWorkers).ConfigureAwait(false);
+
+        var pending = new List<FileDownloadItem>(list.Count);
+        var skipped = 0;
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (upToDate[i]) skipped++;
+            else pending.Add(list[i]);
+        }
+        if (pending.Count == 0) return new SmallFileBatchResult { Skipped = skipped };
+
         var failed = new List<string>();
         var downloaded = 0;
-        var skipped = 0;
         var done = 0;
-        if (list.Count == 0) return new SmallFileBatchResult();
+
+        // 进度权重:文件大小都已知时按字节,否则退回按个数。加载器库的 maven 元数据
+        // 没有 size;assets / 原版库 / Forge 库 / 整合包清单都带,能拿到就按真实字节算。
+        var byteProgress = pending.All(i => i.Size > 0);
+        var totalWeight = byteProgress ? pending.Sum(i => i.Size) : pending.Count;
+        long doneWeight = 0;
 
         // 固定 worker 池 + 动态并发上限:启动 8 个,连续成功后升到 Parallelism,
         // 失败/429 时回退。避免"几千个文件各自 Task.Run 等信号量"的调度开销。
-        var queue = new ConcurrentQueue<FileDownloadItem>(list);
-        var remaining = list.Count;
+        var queue = new ConcurrentQueue<FileDownloadItem>(pending);
+        var remaining = pending.Count;
         var lastReport = DateTime.MinValue;
         var reportLock = new object();
         using var limiter = new AdaptiveLimiter(opts.InitialParallelism, opts.Parallelism);
@@ -88,10 +144,8 @@ public sealed class SmallFileDownloader(HttpClient http)
                 await limiter.WaitAsync(cancellation).ConfigureAwait(false);
                 try
                 {
-                    if (await DownloadOneAsync(item, opts, cancellation).ConfigureAwait(false))
-                        Interlocked.Increment(ref downloaded);
-                    else
-                        Interlocked.Increment(ref skipped);
+                    await DownloadOneAsync(item, opts, cancellation).ConfigureAwait(false);
+                    Interlocked.Increment(ref downloaded);
                     ok = true;
                 }
                 // 只有调用方真的取消了才终止;HttpClient 超时也是 TaskCanceledException,
@@ -111,16 +165,18 @@ public sealed class SmallFileDownloader(HttpClient http)
                     limiter.NoteResult(ok);
                     Interlocked.Decrement(ref remaining);
                     var d = Interlocked.Increment(ref done);
+                    var weight = byteProgress ? item.Size : 1;
+                    var w = Interlocked.Add(ref doneWeight, weight);
                     if (progress != null)
                     {
                         lock (reportLock)
                         {
                             var now = DateTime.UtcNow;
                             // 100ms 节流:几千个小文件逐个 Report 会把 UI 线程淹掉
-                            if (d == list.Count || (now - lastReport).TotalMilliseconds >= 100)
+                            if (d == pending.Count || (now - lastReport).TotalMilliseconds >= 100)
                             {
                                 lastReport = now;
-                                progress.Report(d / (double)list.Count);
+                                progress.Report(Math.Min(1.0, w / (double)Math.Max(1, totalWeight)));
                             }
                         }
                     }
@@ -203,23 +259,30 @@ public sealed class SmallFileDownloader(HttpClient http)
         public void Dispose() => _slots.Dispose();
     }
 
-    /// <summary>返回 true 表示执行了下载，false 表示本地已是最新。</summary>
-    private async Task<bool> DownloadOneAsync(FileDownloadItem item, SmallFileOptions opts, CancellationToken ct)
+    /// <summary>本地已是最新，或别的游戏目录已经下过同一个哈希（硬链接/复制补上）时返回 true。</summary>
+    private static async Task<bool> IsUpToDateAsync(FileDownloadItem item, CancellationToken ct)
+    {
+        if (File.Exists(item.DestPath))
+        {
+            // 没有期望哈希时"存在即信任",不用再读一遍文件
+            if (string.IsNullOrEmpty(item.ExpectedHash)) return true;
+            var localHash = await Hashing.ComputeFileAsync(item.DestPath, item.Algo, ct).ConfigureAwait(false);
+            if (DownloadPlanner.Decide(true, localHash, item.ExpectedHash) == DownloadPlanner.Decision.SkipUpToDate)
+            {
+                // 顺手挂进共享缓存:再装第二个游戏目录时,这批库/assets/模组直接硬链接过去,不用重下
+                DownloadCache.Store(item.DestPath, item.ExpectedHash, item.Algo);
+                return true;
+            }
+        }
+
+        return DownloadCache.TryGet(item.ExpectedHash, item.Algo, out var cached) &&
+               DownloadCache.LinkOrCopy(cached, item.DestPath);
+    }
+
+    private async Task DownloadOneAsync(FileDownloadItem item, SmallFileOptions opts, CancellationToken ct)
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(item.DestPath))!;
         Directory.CreateDirectory(dir);
-
-        if (File.Exists(item.DestPath))
-        {
-            var localHash = await Hashing.ComputeFileAsync(item.DestPath, item.Algo, ct).ConfigureAwait(false);
-            if (DownloadPlanner.Decide(true, localHash, item.ExpectedHash) == DownloadPlanner.Decision.SkipUpToDate)
-                return false;
-        }
-
-        // 别的游戏目录已经下过同一个哈希:直接硬链接/复制过来
-        if (DownloadCache.TryGet(item.ExpectedHash, item.Algo, out var cached) &&
-            DownloadCache.LinkOrCopy(cached, item.DestPath))
-            return true;
 
         var tmpPath = item.DestPath + ".tmp";
         Exception? last = null;
@@ -250,29 +313,11 @@ public sealed class SmallFileDownloader(HttpClient http)
                     throw new IOException("429 请求过于频繁");
                 }
                 response.EnsureSuccessStatusCode();
-                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 using (var target = new FileStream(tmpPath, FileMode.Create, FileAccess.Write, FileShare.None,
                     64 * 1024, useAsync: true))
                 {
-                    var buffer = new byte[64 * 1024];
-                    while (true)
-                    {
-                        // 每读到一块就重置停滞计时;只有真的没数据了才超时
-                        stallCts.CancelAfter(opts.StallTimeout);
-                        int read;
-                        try
-                        {
-                            read = await stream.ReadAsync(buffer, 0, buffer.Length, stallCts.Token)
-                                .ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-                        {
-                            throw new IOException("下载停滞超时");
-                        }
-                        if (read <= 0) break;
-                        await target.WriteAsync(buffer, 0, read, ct).ConfigureAwait(false);
-                    }
+                    // 停滞超时不能只靠 token:net48 里它打断不了挂起的 body 读取
+                    await HttpBody.CopyToAsync(response, target, opts.StallTimeout, ct).ConfigureAwait(false);
                 }
                 if (!await Hashing.VerifyFileAsync(tmpPath, item.ExpectedHash, item.Algo, ct).ConfigureAwait(false))
                     throw new IOException("校验不通过：文件可能损坏或被篡改");
@@ -281,7 +326,7 @@ public sealed class SmallFileDownloader(HttpClient http)
                 DownloadCache.Store(tmpPath, item.ExpectedHash, item.Algo);
                 if (File.Exists(item.DestPath)) File.Delete(item.DestPath);
                 File.Move(tmpPath, item.DestPath);
-                return true;
+                return;
             }
             // 只有调用方真的取消了才终止;HttpClient 超时也是 TaskCanceledException,
             // 那种属于可重试的网络失败(否则一个慢请求会把整批任务判死)

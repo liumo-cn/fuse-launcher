@@ -303,6 +303,7 @@ public static class ModLoaderInstaller
                         DestPath = Path.Combine(librariesRoot, path!.Replace('/', Path.DirectorySeparatorChar)),
                         ExpectedHash = art.Value<string>("sha1"),
                         Algo = HashAlgo.Sha1,
+                        Size = art.Value<long?>("size") ?? 0,
                         // 补出来的地址不保证存在(1.16.5 的普通 jar 就是 processors 产物),
                         // 失败不阻塞安装;真缺了启动时会有明确报错。
                         Optional = urlWasEmpty,
@@ -383,8 +384,13 @@ public static class ModLoaderInstaller
             .ToList();
 
         var small = new SmallFileDownloader(http);
+        // 库下载占 22%~80%;processors 再占 80%~100%。进度必须缩放后再上报,
+        // 否则库下完就冲到 100%,后面跑处理器的几分钟全被"只增不减"的进度显示吃掉
+        var libProgress = progress == null
+            ? null
+            : new CallbackProgress(p => progress.Report(0.22 + p * 0.58));
         var result = await small.DownloadSetAsync(unique,
-            new SmallFileOptions { Parallelism = 8 }, progress, ct).ConfigureAwait(false);
+            new SmallFileOptions { Parallelism = 8 }, libProgress, ct).ConfigureAwait(false);
         if (result.Failed.Count > 0)
         {
             // 镜像偶发限流/官方源抖动:对失败项换低并发再跑一轮,常能救回
@@ -477,6 +483,7 @@ public static class ModLoaderInstaller
                     DestPath = Path.Combine(librariesRoot, path!.Replace('/', Path.DirectorySeparatorChar)),
                     ExpectedHash = art.Value<string>("sha1"),
                     Algo = HashAlgo.Sha1,
+                    Size = art.Value<long?>("size") ?? 0,
                 });
                 continue;
             }
@@ -599,14 +606,9 @@ public static class ModLoaderInstaller
                         last = new HttpRequestException($"{(int)response.StatusCode} {url}");
                         break;
                     }
-                    // 响应体同样受本次尝试的超时约束(ReadAsByteArrayAsync 无 token)
-                    using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                    using var buffer = new MemoryStream();
-                    var buf = new byte[64 * 1024];
-                    int read;
-                    while ((read = await stream.ReadAsync(buf, 0, buf.Length, cts.Token).ConfigureAwait(false)) > 0)
-                        buffer.Write(buf, 0, read);
-                    return buffer.ToArray();
+                    // 响应体同样受本次尝试的 90 秒预算约束;停滞的 body 直接掐连接
+                    return await HttpBody.ReadAsBytesAsync(response, OfficialTimeout, cts.Token)
+                        .ConfigureAwait(false);
                 }
                 catch (Exception ex) when (!ct.IsCancellationRequested)
                 {

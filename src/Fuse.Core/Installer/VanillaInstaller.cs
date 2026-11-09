@@ -25,6 +25,7 @@ public static class VanillaInstallPlanner
             DestPath = Path.Combine(versionsRoot, jarId, jarId + ".jar"),
             ExpectedHash = client.Sha1,
             Algo = HashAlgo.Sha1,
+            Size = client.Size,
         };
     }
 
@@ -43,6 +44,7 @@ public static class VanillaInstallPlanner
                     DestPath = Path.Combine(librariesRoot, lib.Artifact.Path.Replace('/', Path.DirectorySeparatorChar)),
                     ExpectedHash = lib.Artifact.Sha1,
                     Algo = HashAlgo.Sha1,
+                    Size = lib.Artifact.Size,
                 });
             }
             // 旧式 natives classifier jar（≤1.18）也要下载用于 natives 提取
@@ -56,6 +58,7 @@ public static class VanillaInstallPlanner
                     DestPath = Path.Combine(librariesRoot, native.Path.Replace('/', Path.DirectorySeparatorChar)),
                     ExpectedHash = native.Sha1,
                     Algo = HashAlgo.Sha1,
+                    Size = native.Size,
                 });
             }
         }
@@ -92,6 +95,7 @@ public static class VanillaInstallPlanner
                 DestPath = Path.Combine(assetsRoot, "objects", hash[..2], hash),
                 ExpectedHash = hash,
                 Algo = HashAlgo.Sha1,
+                Size = prop.Value?["size"]?.Value<long>() ?? 0,
             });
         }
         return items.DistinctByPath().ToList();
@@ -108,6 +112,7 @@ public static class VanillaInstallPlanner
             DestPath = Path.Combine(gameDirectory, "log4jConfig.xml"),
             ExpectedHash = file.Sha1,
             Algo = HashAlgo.Sha1,
+            Size = file.Size,
         };
     }
 

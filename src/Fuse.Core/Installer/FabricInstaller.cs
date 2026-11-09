@@ -53,19 +53,11 @@ public static class FabricInstaller
                     last = new HttpRequestException($"{(int)response.StatusCode} {baseUrl}");
                     continue;
                 }
-                // 响应体也要受同一个 8 秒预算约束:ReadAsStringAsync 没有 token,
-                // 慢速涓流的官方源会一直读到 HttpClient 默认超时(100s),外层 20s 也打断不了。
-                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                using var reader = new System.IO.StreamReader(stream, System.Text.Encoding.UTF8);
-                var sb = new System.Text.StringBuilder();
-                var buffer = new char[8192];
-                int read;
-                while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
-                {
-                    cts.Token.ThrowIfCancellationRequested();
-                    sb.Append(buffer, 0, read);
-                }
-                return JArray.Parse(sb.ToString());
+                // 响应体同样受 8 秒预算约束;停滞的 body 直接掐连接,不会一直读到 HttpClient 的 100 秒。
+                // (net48 里给 ReadAsync 传 token 并不能打断挂起的读,必须 Dispose 响应)
+                var text = await Download.HttpBody.ReadAsStringAsync(response, OfficialTimeout, cts.Token)
+                    .ConfigureAwait(false);
+                return JArray.Parse(text);
             }
             catch (Exception ex) when (!ct.IsCancellationRequested)
             {
@@ -211,7 +203,7 @@ public static class FabricInstaller
         // mcVersion 是真正的 MC 版本(Fabric meta 只认它;不传就退化成 gameVersion)。
         var lookupVersion = string.IsNullOrEmpty(mcVersion) ? gameVersion : mcVersion!;
 
-        // 1. 原版底座（占 80% 进度；已装则秒过）
+        // 1. 底座:已装就只是检查一下(5%);真要现装才把大头进度给它
         var vanillaJsonPath = Path.Combine(versionsRoot, lookupVersion, lookupVersion + ".json");
         var vanillaJarPath = Path.Combine(versionsRoot, lookupVersion, lookupVersion + ".jar");
         // 底座是派生版本(如 OptiFine)时自己没有 jar,客户端 jar 在父版本目录里
@@ -222,7 +214,8 @@ public static class FabricInstaller
             var parentJar = Path.Combine(versionsRoot, jarId, jarId + ".jar");
             if (File.Exists(parentJar)) vanillaJarPath = parentJar;
         }
-        if (!File.Exists(vanillaJsonPath) || !File.Exists(vanillaJarPath))
+        var baseInstalled = File.Exists(vanillaJsonPath) && File.Exists(vanillaJarPath);
+        if (!baseInstalled)
         {
             var manifest = await MojangSource.FetchManifestAsync(http, cancellation).ConfigureAwait(false);
             var entry = manifest.FirstOrDefault(v => v.Id == lookupVersion)
@@ -230,16 +223,19 @@ public static class FabricInstaller
             var version = await MojangSource.DownloadVersionJsonAsync(http, entry, versionsRoot, cancellation).ConfigureAwait(false);
             var installer = new VanillaInstaller(http);
             await installer.InstallAsync(version, versionsRoot, librariesRoot, assetsRoot, gameDirectory,
-                ToScaled(progress, 0, 0.8), cancellation).ConfigureAwait(false);
+                ToScaled(progress, 0, BaseInstallWeight), cancellation).ConfigureAwait(false);
         }
-        progress?.Report(0.8);
+        var afterBase = baseInstalled ? 0.05 : BaseInstallWeight;
+        progress?.Report(afterBase);
 
-        // 2. Fabric meta
+        // 2. Fabric meta(5%)
+        var metaEnd = afterBase + 0.05;
         var arr = await FetchMetaAsync(http, lookupVersion, cancellation).ConfigureAwait(false);
         var entryObj = arr.Cast<JObject>().FirstOrDefault(e => e["loader"]?.Value<string>("version") == loaderVersion)
                        ?? throw new InvalidOperationException($"Fabric {loaderVersion} 不支持 {lookupVersion}");
+        progress?.Report(metaEnd);
 
-        // 3. 写版本 JSON + 下载库（占 20%）
+        // 3. 写版本 JSON + 下载库(剩下的全部)
         var baseJsonPath = Path.Combine(versionsRoot, gameVersion, gameVersion + ".json");
         var baseJson = File.Exists(baseJsonPath) ? baseJsonPath : vanillaJsonPath;
         var vanillaJson = JObject.Parse(File.ReadAllText(baseJson));
@@ -253,11 +249,14 @@ public static class FabricInstaller
         var small = new SmallFileDownloader(http);
         var result = await small.DownloadSetAsync(libItems,
             new SmallFileOptions { Parallelism = 16 },
-            ToScaled(progress, 0.8, 0.2), cancellation).ConfigureAwait(false);
+            ToScaled(progress, metaEnd, 1 - metaEnd), cancellation).ConfigureAwait(false);
         if (result.Failed.Count > 0)
             throw new IOException($"Fabric 库下载失败 {result.Failed.Count} 个：{result.Failed[0]}");
         progress?.Report(1.0);
     }
+
+    /// <summary>底座真的需要现装时,它占的进度份额(平时已装好,只吃 5% 的检查)。</summary>
+    private const double BaseInstallWeight = 0.70;
 
     private static IProgress<double> ToScaled(IProgress<double>? progress, double offset, double weight)
         => new CallbackProgress(p => progress?.Report(offset + weight * p));

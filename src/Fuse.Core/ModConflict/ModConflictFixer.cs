@@ -219,9 +219,10 @@ public static class ModConflictFixer
                            .ConfigureAwait(false))
                 {
                     response.EnsureSuccessStatusCode();
-                    using var input = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
                     using var output = File.Create(temp);
-                    await input.CopyToAsync(output, 64 * 1024, cts.Token).ConfigureAwait(false);
+                    // token 在 net48 里打断不了挂起的 body 读取,交给 HttpBody 掐连接
+                    await Download.HttpBody.CopyToAsync(response, output, TimeSpan.FromSeconds(120), ct,
+                        attemptToken: cts.Token).ConfigureAwait(false);
                 }
                 if (!string.IsNullOrEmpty(sha1))
                 {

@@ -297,9 +297,10 @@ public static class MirrorProbe
             using var response = await http.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return null;
-            using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            var buffer = new byte[1];
-            await stream.ReadAsync(buffer, 0, 1, cts.Token).ConfigureAwait(false);
+            // 读不动就掐连接:卡住的测速会一直占着 ProbeGate,后面的源永远排不上
+            using var sink = new MemoryStream(1);
+            await HttpBody.CopyToAsync(response, sink, PreflightTimeout, cts.Token, 1024, 1)
+                .ConfigureAwait(false);
             watch.Stop();
             return Math.Max(1, watch.Elapsed.TotalMilliseconds);
         }
@@ -321,16 +322,9 @@ public static class MirrorProbe
             using var response = await http.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return null;
-            using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
-            var buffer = new byte[64 * 1024];
-            long total = 0;
-            while (total < SampleBytes)
-            {
-                var want = (int)Math.Min(buffer.Length, SampleBytes - total);
-                var read = await stream.ReadAsync(buffer, 0, want, cts.Token).ConfigureAwait(false);
-                if (read <= 0) break;
-                total += read;
-            }
+            using var sink = new MemoryStream(SampleBytes);
+            var total = await HttpBody.CopyToAsync(response, sink, SampleTimeout, cts.Token,
+                HttpBody.DefaultBufferSize, SampleBytes).ConfigureAwait(false);
             watch.Stop();
             if (total == 0) return null;
             var ms = Math.Max(1, watch.Elapsed.TotalMilliseconds);

@@ -187,8 +187,49 @@ public sealed class DownloadQueue
     public static DownloadQueue CreateDefault(DownloadTaskStore store, HttpClient http, int maxConcurrent, int smallFileParallelism)
         => new(store, new DefaultExecutor(http, smallFileParallelism), maxConcurrent);
 
+    /// <summary>同一个下载请求的参数指纹:重复点下载时用来判断是不是"同一件事"。</summary>
+    private static string RequestKey(DownloadTaskRecord record)
+    {
+        // 安装类任务的参数全在 Meta 里(版本目录/加载器版本/整合包);普通文件看地址与落盘路径
+        if (!string.IsNullOrEmpty(record.Meta))
+            return record.Kind + "|" + record.Meta;
+        return string.Concat(record.Kind, "|", record.SourceUrl, "|", record.DestPath, "|",
+            record.ExpectedHash ?? "", "|", record.ManifestPath ?? "");
+    }
+
     public DownloadTaskRecord Enqueue(DownloadTaskRecord record)
     {
+        // 重复点同一个"下载"不再排第二份:参数相同的任务已在排队/下载/暂停时直接复用。
+        // 版本安装以前靠版本锁串行,会把整个安装再跑一遍;文件/模组任务连锁都没有,
+        // 两份任务还会同时写同一个 .tmp,互相抢文件锁。
+        DownloadTaskRecord? duplicate;
+        var resume = false;
+        lock (_lock)
+        {
+            var key = RequestKey(record);
+            duplicate = _store.GetAll()
+                .Where(r => r.Status is DownloadTaskStatus.Queued or DownloadTaskStatus.Downloading
+                    or DownloadTaskStatus.Paused)
+                .FirstOrDefault(r => string.Equals(RequestKey(r), key, StringComparison.Ordinal));
+            if (duplicate != null && duplicate.Status == DownloadTaskStatus.Paused)
+            {
+                // 暂停中的同项再点一次 = 继续,不新增任务
+                duplicate.Status = DownloadTaskStatus.Queued;
+                duplicate.Pausing = false;
+                _store.Upsert(duplicate);
+                resume = true;
+            }
+        }
+
+        if (duplicate != null)
+        {
+            Trace((resume ? "dedupe: resume " : "dedupe: already active ") + duplicate.TaskId +
+                  " (" + duplicate.Kind + ")");
+            OnChanged(duplicate);
+            Pump();
+            return duplicate;
+        }
+
         record.Status = DownloadTaskStatus.Queued;
         record.Progress = 0;
         record.ErrorMessage = null;
@@ -755,6 +796,7 @@ public sealed class DownloadQueue
                         DestPath = Path.Combine(gameDir, f.RelativePath.Replace('/', Path.DirectorySeparatorChar)),
                         ExpectedHash = string.IsNullOrEmpty(f.Sha1) ? null : f.Sha1,
                         Algo = HashAlgo.Sha1,
+                        Size = f.Size,
                     }).ToList();
                     if (items.Count > 0)
                     {
