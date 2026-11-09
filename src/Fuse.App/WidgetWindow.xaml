@@ -1,4 +1,4 @@
-<Window x:Class="Fuse.App.WidgetWindow"
+﻿<Window x:Class="Fuse.App.WidgetWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Fuse Launcher" Width="460" Height="380"
@@ -38,7 +38,7 @@
             Cursor="Hand" MouseLeftButtonDown="Orb_MouseLeftButtonDown"
             MouseMove="Orb_MouseMove"
             MouseLeftButtonUp="Orb_MouseLeftButtonUp" MouseLeave="Orb_MouseLeave">
-      <Ellipse x:Name="OrbDisc" Fill="{DynamicResource OrbFillBrush}" Effect="{DynamicResource OrbGlow}"/>
+      <Ellipse x:Name="OrbDisc" CacheMode="BitmapCache" Fill="{DynamicResource OrbFillBrush}" Effect="{DynamicResource OrbGlow}"/>
       <Ellipse Margin="3">
         <Ellipse.Fill>
           <RadialGradientBrush GradientOrigin="0.32,0.28">

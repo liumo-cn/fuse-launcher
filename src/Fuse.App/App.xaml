@@ -1,4 +1,4 @@
-<Application x:Class="Fuse.App.App"
+﻿<Application x:Class="Fuse.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:app="clr-namespace:Fuse.App"
@@ -545,8 +545,10 @@
               <Grid.RenderTransform>
                 <ScaleTransform x:Name="petalHoverScale" ScaleX="1" ScaleY="1"/>
               </Grid.RenderTransform>
-              <!-- 光晕盘:经 PetalGlow 形成柔和外发光,垫在玻璃盘后 -->
-              <Ellipse Fill="{DynamicResource PetalGlowDiscBrush}" Effect="{DynamicResource PetalGlow}"/>
+              <!-- 光晕盘:经 PetalGlow 形成柔和外发光,垫在玻璃盘后。
+                   BitmapCache:星光(Opacity 动画)与漂浮(平移)只重合成缓存位图,
+                   不再每帧重跑 56px 半径的 DropShadow 模糊——空闲 CPU 从 ~40% 单核降到个位数 -->
+              <Ellipse CacheMode="BitmapCache" Fill="{DynamicResource PetalGlowDiscBrush}" Effect="{DynamicResource PetalGlow}"/>
               <!-- 玻璃盘:边缘羽化的主题色圆 -->
               <Ellipse x:Name="bd" Fill="{DynamicResource PetalFillSoftBrush}"/>
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>

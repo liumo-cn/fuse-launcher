@@ -58,6 +58,8 @@ public partial class WidgetWindow : Window
     private ScaleTransform? _orbScale;
     private TranslateTransform? _orbShift;
     private System.Windows.Media.Effects.DropShadowEffect? _glowClone;
+    /// <summary>星光动画的作用目标(大圆盘 + 各花瓣光晕盘),不可见暂停时按此定格。</summary>
+    private readonly List<System.Windows.UIElement> _twinkleTargets = new();
     private Ellipse? _fxFlash;
 
     // ---- 圆弧动画参数(FR-12) ----
@@ -124,6 +126,14 @@ public partial class WidgetWindow : Window
         Orb.RenderTransform = orbFx;
         _fxTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _fxTimer.Tick += (_, _) => FxTick();
+
+        // 不可见(收进托盘/启动后隐藏)时暂停星光与漂浮:窗口隐藏不渲染,
+        // 但 WPF 动画仍每帧空转;可见恢复时原样续播(帧率不变,只是不白烧)。
+        IsVisibleChanged += (_, e) =>
+        {
+            if (e.NewValue is true) ResumeIdleAnimations();
+            else PauseIdleAnimations();
+        };
 
         // 模板实例化发生在首次渲染,故延迟到 Background 优先级再启动星光
         Loaded += (_, _) => Dispatcher.BeginInvoke(
@@ -683,8 +693,13 @@ public partial class WidgetWindow : Window
     {
         try
         {
+            _twinkleTargets.Clear();
             var orbDisc = Orb.Children.OfType<System.Windows.Shapes.Ellipse>().FirstOrDefault();
-            orbDisc?.BeginAnimation(OpacityProperty, Twinkle(0.80, 1.0, TimeSpan.Zero));
+            if (orbDisc != null)
+            {
+                orbDisc.BeginAnimation(OpacityProperty, Twinkle(0.80, 1.0, TimeSpan.Zero));
+                _twinkleTargets.Add(orbDisc);
+            }
 
             var petals = Petals();
             var found = 0;
@@ -696,6 +711,7 @@ public partial class WidgetWindow : Window
                 if (disc == null) continue;
                 found++;
                 disc.BeginAnimation(OpacityProperty, Twinkle(0.28, 1.0, TimeSpan.FromMilliseconds(i * 470)));
+                _twinkleTargets.Add(disc);
             }
             Boot($"twinkle started (petals {found}/{petals.Length})");
             _twinkleStarted = true;
@@ -704,6 +720,48 @@ public partial class WidgetWindow : Window
         {
             // 星光只是装饰:失败也绝不能影响启动器的正常使用
             Boot("twinkle failed: " + ex.GetType().Name + " " + ex.Message);
+        }
+    }
+
+    /// <summary>不可见时暂停装饰动画:漂浮定格在当前偏移、星光定格在当前亮度、悬停计时器停走。</summary>
+    private void PauseIdleAnimations()
+    {
+        try
+        {
+            if (_floatStarted)
+                for (var i = 0; i < _floatOffsets.Length; i++)
+                    FreezePetalFloat(i);
+            foreach (var el in _twinkleTargets)
+            {
+                var held = el.Opacity;                       // 动画驱动的当前值
+                el.BeginAnimation(OpacityProperty, null);    // 摘掉动画(会弹回基准值)
+                el.Opacity = held;                           // 立刻定格,肉眼无跳变
+            }
+            _hoverTimer.Stop();
+        }
+        catch (Exception)
+        {
+            // 纯装饰:暂停失败不影响任何功能
+        }
+    }
+
+    /// <summary>恢复可见:星光/漂浮按原有节奏续播(帧率不变)。</summary>
+    private void ResumeIdleAnimations()
+    {
+        try
+        {
+            if (_twinkleStarted) StartTwinkle();
+            if (_floatStarted)
+                for (var i = 0; i < _floatOffsets.Length; i++)
+                {
+                    var off = _floatOffsets[i];
+                    if (off != null) StartPetalFloat(i, off.X, off.Y);
+                }
+            if (IsLoaded && !_hoverTimer.IsEnabled) _hoverTimer.Start();
+        }
+        catch (Exception)
+        {
+            // 纯装饰:恢复失败不影响任何功能
         }
     }
 
