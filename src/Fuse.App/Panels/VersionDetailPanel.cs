@@ -168,6 +168,21 @@ public class VersionDetailPanel : UserControl
     private string InstDir() => AppServices.InstanceDirectoryIn(_gameRoot, _versionId);
     private string ModsDir() => System.IO.Path.Combine(InstDir(), "mods");
 
+    /// <summary>没有开版本隔离:多个版本共用根目录,mods/logs/crash-reports 都是共用的。</summary>
+    private bool SharedGameDirectory()
+    {
+        try
+        {
+            var instance = Path.GetFullPath(InstDir()).TrimEnd(Path.DirectorySeparatorChar);
+            var root = Path.GetFullPath(_gameRoot).TrimEnd(Path.DirectorySeparatorChar);
+            return string.Equals(instance, root, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     public VersionDetailPanel(string versionId)
     {
         _versionId = versionId;
@@ -1179,7 +1194,9 @@ public class VersionDetailPanel : UserControl
         });
         host.Children.Add(new TextBlock
         {
-            Text = "启动失败时先分析最近的崩溃报告，或临时禁用全部模组（安全模式）排查。",
+            Text = SharedGameDirectory()
+                ? "启动失败时先分析最近的崩溃报告，或临时禁用全部模组（安全模式）排查。当前版本与其它版本共用游戏目录：日志和崩溃报告是共用的，只会认最近一次匹配本版本的启动，禁用模组会影响所有共用版本。"
+                : "启动失败时先分析最近的崩溃报告，或临时禁用全部模组（安全模式）排查。",
             FontSize = 11,
             Foreground = T2,
             Opacity = 0.66,
@@ -1197,8 +1214,7 @@ public class VersionDetailPanel : UserControl
         var chips = new (string Text, string AutoName, Action Click)[]
         {
             ("分析最近崩溃", "分析最近崩溃", AnalyzeCrash),
-            ("查看最新日志", "查看最新日志", () =>
-                OpenLogViewer(Path.Combine(InstDir(), "logs", "latest.log"), "最新日志")),
+            ("查看最新日志", "查看最新日志", OpenLatestLog),
             ("查看最近崩溃", "查看最近崩溃", OpenLatestCrashReport),
             ("全部禁用", "全部禁用模组", SafeModeDisableAll),
             ("校验并修复文件", "校验并修复文件", VerifyAndRepair),
@@ -1238,28 +1254,61 @@ public class VersionDetailPanel : UserControl
         return button;
     }
 
+    private void OpenLatestLog()
+    {
+        if (SharedGameDirectory())
+        {
+            var launch = Path.Combine(InstDir(), "logs", "latest-launch.log");
+            if (!Fuse.Core.Logging.LaunchLogAttribution.IsForVersion(launch, _versionId))
+            {
+                Toast("最近一次启动不是这个版本（共用游戏目录），先启动这个版本再看日志", _crashCard);
+                return;
+            }
+            OpenLogViewer(launch, "最新启动日志");
+            return;
+        }
+        OpenLogViewer(Path.Combine(InstDir(), "logs", "latest.log"), "最新日志");
+    }
+
     private async void AnalyzeCrash()
     {
         try
         {
             Toast("正在分析最近一次崩溃…", _crashCard);
-            var result = await Task.Run(() => CrashAnalyzer.Analyze(InstDir(), ModsDir()));
+            var shared = SharedGameDirectory();
+            var result = await Task.Run(() =>
+                CrashAnalyzer.Analyze(InstDir(), ModsDir(), _versionId, shared));
             if (result == null)
             {
-                Toast("没有找到崩溃报告或日志", _crashCard);
+                Toast("没有找到这个版本的崩溃报告或日志", _crashCard);
+                return;
+            }
+            if (result.WrongVersion)
+            {
+                Toast("最近一次启动不是这个版本（共用游戏目录），先启动这个版本再分析", _crashCard);
                 return;
             }
             if (result.Suspects.Count == 0)
             {
-                OpenCrashFolder();
-                Toast("没有匹配到具体模组，已打开崩溃报告目录", _crashCard);
+                if (shared)
+                {
+                    Toast("没有匹配到具体模组；这个版本最近一次启动没有产生崩溃报告", _crashCard);
+                }
+                else
+                {
+                    OpenCrashFolder();
+                    Toast("没有匹配到具体模组，已打开崩溃报告目录", _crashCard);
+                }
                 return;
             }
 
             var names = string.Join("\n", result.Suspects.Take(8).Select(s => "· " + s.Name));
+            var sharedNote = shared
+                ? "\n\n注意：当前版本与其它版本共用 mods 目录，禁用会影响所有共用版本。"
+                : "";
             var confirm = new ConfirmWindow("疑似模组",
                 "最近一次崩溃（" + result.When.ToString("MM-dd HH:mm") + "）里出现了这些模组的名字：\n\n" +
-                names + "\n\n禁用它们后再启动试试。",
+                names + "\n\n禁用它们后再启动试试。" + sharedNote,
                 "禁用这些模组", danger: true);
             if (Show(confirm) != true) return;
             var count = DisableMods(result.Suspects.Select(s => s.FilePath));
@@ -1284,9 +1333,12 @@ public class VersionDetailPanel : UserControl
             Toast("没有启用中的模组", _crashCard);
             return;
         }
+        var sharedNote = SharedGameDirectory()
+            ? "\n\n注意：当前版本与其它版本共用 mods 目录，禁用会影响所有共用版本。"
+            : "";
         var confirm = new ConfirmWindow("安全模式",
             "将禁用全部 " + mods.Length + " 个模组（重命名为 .disabled）。\n\n" +
-            "启动游戏确认问题后，再到「本地」页逐个启用排查。",
+            "启动游戏确认问题后，再到「本地」页逐个启用排查。" + sharedNote,
             "全部禁用", danger: true);
         if (Show(confirm) != true) return;
         var count = DisableMods(mods);
@@ -1353,6 +1405,8 @@ public class VersionDetailPanel : UserControl
         {
             var dir = Path.Combine(InstDir(), "crash-reports");
             Directory.CreateDirectory(dir);
+            if (SharedGameDirectory())
+                Toast("该版本与其它版本共用 crash-reports，里面的报告可能来自别的版本", _crashCard);
             System.Diagnostics.Process.Start("explorer.exe", "\"" + dir + "\"");
         }
         catch (Exception ex)
@@ -1374,6 +1428,26 @@ public class VersionDetailPanel : UserControl
     private void OpenLatestCrashReport()
     {
         var dir = Path.Combine(InstDir(), "crash-reports");
+        if (SharedGameDirectory())
+        {
+            // 共用目录:别的版本留下的崩溃报告不能当成这个版本的
+            var launch = Path.Combine(InstDir(), "logs", "latest-launch.log");
+            if (!Fuse.Core.Logging.LaunchLogAttribution.IsForVersion(launch, _versionId))
+            {
+                Toast("最近一次启动不是这个版本（共用游戏目录），无法确认崩溃报告归属", _crashCard);
+                return;
+            }
+            var since = Fuse.Core.Logging.LaunchLogAttribution.LaunchStartedAt(launch);
+            var mine = CrashAnalyzer.LatestCrashReport(dir, since);
+            if (mine == null)
+            {
+                Toast("这个版本最近一次启动没有产生崩溃报告（共用目录）", _crashCard);
+                return;
+            }
+            OpenLogViewer(mine.FullName, "崩溃报告 · " + mine.LastWriteTime.ToString("MM-dd HH:mm"));
+            return;
+        }
+
         if (!Directory.Exists(dir))
         {
             Toast("还没有崩溃报告", _crashCard);
@@ -1613,10 +1687,24 @@ public class VersionDetailPanel : UserControl
         var sb = new System.Text.StringBuilder();
         try
         {
-            var crash = Path.Combine(InstDir(), "crash-reports");
-            if (Directory.Exists(crash))
+            if (SharedGameDirectory())
             {
-                var latest = new DirectoryInfo(crash).GetFiles("*.txt")
+                // 共用目录:只把最近一次匹配本版本的启动日志和它之后的崩溃报告交给分析
+                var launch = Path.Combine(InstDir(), "logs", "latest-launch.log");
+                if (!Fuse.Core.Logging.LaunchLogAttribution.IsForVersion(launch, _versionId))
+                    return "";
+                sb.AppendLine(ReadTail(launch));
+                var since = Fuse.Core.Logging.LaunchLogAttribution.LaunchStartedAt(launch);
+                var crash = CrashAnalyzer.LatestCrashReport(
+                    Path.Combine(InstDir(), "crash-reports"), since);
+                if (crash != null) sb.AppendLine(ReadTail(crash.FullName));
+                return sb.ToString();
+            }
+
+            var crashDir = Path.Combine(InstDir(), "crash-reports");
+            if (Directory.Exists(crashDir))
+            {
+                var latest = new DirectoryInfo(crashDir).GetFiles("*.txt")
                     .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
                 if (latest != null) sb.AppendLine(ReadTail(latest.FullName));
             }

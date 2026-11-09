@@ -29,19 +29,37 @@ internal static class CrashAnalyzer
         public DateTime When { get; set; }
         public List<Suspect> Suspects { get; set; } = new();
         public string Excerpt { get; set; } = "";
+        /// <summary>共享游戏目录时:最近一次日志/崩溃报告不是这个版本的。</summary>
+        public bool WrongVersion { get; set; }
     }
 
-    public static Result? Analyze(string instanceDir, string modsDir)
+    public static Result? Analyze(string instanceDir, string modsDir,
+        string? versionId = null, bool sharedGameDir = false)
     {
         FileInfo? source = null;
         var crashDir = Path.Combine(instanceDir, "crash-reports");
-        if (Directory.Exists(crashDir))
-            source = new DirectoryInfo(crashDir).GetFiles("*.txt")
-                .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
-        if (source == null)
+        var launchLog = Path.Combine(instanceDir, "logs", "latest-launch.log");
+
+        if (sharedGameDir && !string.IsNullOrEmpty(versionId))
         {
-            var log = Path.Combine(instanceDir, "logs", "latest.log");
-            if (File.Exists(log)) source = new FileInfo(log);
+            // 共用游戏目录时 latest.log / crash-reports 所有版本混在一起,
+            // 只认最近一次 --version 对得上的启动,以及这次启动之后产生的崩溃报告。
+            if (!Fuse.Core.Logging.LaunchLogAttribution.IsForVersion(launchLog, versionId))
+                return new Result { WrongVersion = true, SourceFile = launchLog };
+
+            var since = Fuse.Core.Logging.LaunchLogAttribution.LaunchStartedAt(launchLog);
+            source = LatestCrashReport(crashDir, since) ?? new FileInfo(launchLog);
+        }
+        else
+        {
+            if (Directory.Exists(crashDir))
+                source = new DirectoryInfo(crashDir).GetFiles("*.txt")
+                    .OrderByDescending(f => f.LastWriteTime).FirstOrDefault();
+            if (source == null)
+            {
+                var log = Path.Combine(instanceDir, "logs", "latest.log");
+                if (File.Exists(log)) source = new FileInfo(log);
+            }
         }
         if (source == null) return null;
 
@@ -53,6 +71,23 @@ internal static class CrashAnalyzer
             Suspects = FindSuspects(text, modsDir),
             Excerpt = BuildExcerpt(text),
         };
+    }
+
+    /// <summary>最近一次启动之后产生的崩溃报告;共用目录时用来排除别的版本留下的旧报告。</summary>
+    public static FileInfo? LatestCrashReport(string crashDir, DateTime notBefore)
+    {
+        try
+        {
+            if (!Directory.Exists(crashDir)) return null;
+            return new DirectoryInfo(crashDir).GetFiles("*.txt")
+                .Where(f => notBefore == DateTime.MinValue || f.LastWriteTime >= notBefore.AddSeconds(-30))
+                .OrderByDescending(f => f.LastWriteTime)
+                .FirstOrDefault();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private static string ReadTail(string path, int maxBytes)

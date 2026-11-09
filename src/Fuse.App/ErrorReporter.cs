@@ -94,6 +94,22 @@ public static class ErrorReporter
                 }
             }
 
+            // 外部/第三方目录也要带上:共享目录的日志在根 logs,隔离版本在各 versions/<id>/logs
+            var roots = AppServices.GameDirectories;
+            for (var i = 0; i < roots.Count; i++)
+            {
+                var root = roots[i];
+                Add(Path.Combine(root, "logs", "latest-launch.log"), $"game-{i + 1}/root-latest-launch.log");
+                var versions = Path.Combine(root, "versions");
+                if (!Directory.Exists(versions)) continue;
+                foreach (var dir in Directory.EnumerateDirectories(versions))
+                {
+                    var name = Path.GetFileName(dir);
+                    Add(Path.Combine(dir, "logs", "latest-launch.log"),
+                        $"game-{i + 1}/versions/{name}/latest-launch.log");
+                }
+            }
+
             using (var zip = ZipFile.Open(dlg.FileName, ZipArchiveMode.Create))
             {
                 var summary = zip.CreateEntry("summary.txt");

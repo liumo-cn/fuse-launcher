@@ -52,12 +52,14 @@ public static class AppLauncher
         status("正在启动…");
         var widget = AppServices.Widget;
         widget?.NotifyLaunchStarted();
+        // 放在 try 外面:catch 里报错也要知道实际的 gameDir(共享目录时不是 instances/<id>)
+        var launchRoot = AppServices.FindVersionRoot(versionId) ?? AppServices.ActiveGameDirectory;
+        var gameDirectory = AppServices.InstanceDirectoryIn(launchRoot, versionId);
         try
         {
             // 版本可能在任何一个游戏目录里(主目录 / 导入的官方或第三方目录),按所在目录启动
-            var root = AppServices.FindVersionRoot(versionId) ?? AppServices.ActiveGameDirectory;
+            var root = launchRoot;
             var versionsRoot = System.IO.Path.Combine(root, "versions");
-            var gameDirectory = AppServices.InstanceDirectoryIn(root, versionId);
             Log("root " + versionId + ": " + root);
 
             // 版本列表可能是旧的(文件夹切换/外部删除),启动前先确认 version.json 真的在;
@@ -208,7 +210,8 @@ public static class AppLauncher
                     "FuseLauncher", "crash.log"),
                 $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 启动失败\n{ex}\n\n");
             status("启动失败：" + ex.Message);
-            var logPath = System.IO.Path.Combine(AppServices.InstanceDirectory(versionId), "logs", "latest-launch.log");
+            // 共享游戏目录的版本 InstanceDirectory 不是实际 gameDir,直接用启动时的 gameDirectory
+            var logPath = System.IO.Path.Combine(gameDirectory, "logs", "latest-launch.log");
             ErrorReporter.Report("启动失败 " + versionId, ex, logPath);
             return LaunchOutcome.Failed;
         }
