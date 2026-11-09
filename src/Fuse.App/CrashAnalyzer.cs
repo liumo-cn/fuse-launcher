@@ -151,7 +151,8 @@ internal static class CrashAnalyzer
                 return (json.Value<string>("id") ?? "", json.Value<string>("name") ?? "");
             }
             var toml = zip.Entries.FirstOrDefault(e =>
-                e.FullName.Equals("META-INF/mods.toml", StringComparison.OrdinalIgnoreCase));
+                e.FullName.Equals("META-INF/mods.toml", StringComparison.OrdinalIgnoreCase) ||
+                e.FullName.Equals("META-INF/neoforge.mods.toml", StringComparison.OrdinalIgnoreCase));
             if (toml != null)
             {
                 using var reader = new StreamReader(toml.Open());

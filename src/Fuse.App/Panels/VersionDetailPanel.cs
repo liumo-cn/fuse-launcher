@@ -5958,7 +5958,7 @@ public class VersionDetailPanel : UserControl
             if (_exportChoice == 1)
             {
                 var result = await Task.Run(() => VersionExporter.ExportFullZipAsync(
-                    _versionId, VRoot(), AppServices.InstancesRoot,
+                    _versionId, VRoot(), InstDir(),
                     LibsRoot(), target, CancellationToken.None)).ConfigureAwait(false);
                 await Dispatcher.InvokeAsync(new Action(() =>
                 {

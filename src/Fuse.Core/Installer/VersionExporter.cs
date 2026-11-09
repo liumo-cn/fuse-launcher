@@ -25,8 +25,15 @@ public sealed class ExportResult
 /// </summary>
 public static class VersionExporter
 {
-    /// <summary>排除项:日志与临时目录。存档(saves)按用户要求**包含**在完整版本 zip 里。</summary>
-    private static readonly string[] ExcludedDirs = { "logs", "crash-reports", "bin", "cache" };
+    /// <summary>
+    /// 排除项:日志、临时目录和共享根目录里的全局资源。
+    /// 外部共享布局的实例目录就是 .minecraft 根,不排除会把 assets/libraries 重复打包进去。
+    /// </summary>
+    private static readonly string[] ExcludedDirs =
+    {
+        "logs", "crash-reports", "bin", "cache",
+        "assets", "libraries", "versions", "instances", "backups", "runtimes",
+    };
 
     /// <summary>排除项:个人数据文件(键位/视频设置、服务器列表、账号缓存),不随版本分发。</summary>
     private static readonly string[] ExcludedFiles =
@@ -62,13 +69,13 @@ public static class VersionExporter
 
     /// <summary>① 完整版本 zip:版本目录 + 实例目录(含存档,不含个人数据/日志)+ 依赖库。</summary>
     public static Task<ExportResult> ExportFullZipAsync(
-        string versionId, string versionsRoot, string instancesRoot, string librariesRoot,
+        string versionId, string versionsRoot, string instanceDir, string librariesRoot,
         string targetZip, CancellationToken cancellation)
         // zip 写盘是纯 IO,挪到线程池避免占用调用方(UI)线程
-        => Task.Run(() => ExportFullZipCore(versionId, versionsRoot, instancesRoot, librariesRoot, targetZip, cancellation));
+        => Task.Run(() => ExportFullZipCore(versionId, versionsRoot, instanceDir, librariesRoot, targetZip, cancellation));
 
     private static ExportResult ExportFullZipCore(
-        string versionId, string versionsRoot, string instancesRoot, string librariesRoot,
+        string versionId, string versionsRoot, string instanceDir, string librariesRoot,
         string targetZip, CancellationToken cancellation)
     {
         var tmp = targetZip + ".tmp";
@@ -98,12 +105,17 @@ public static class VersionExporter
                     if (ExcludedDirs.Contains(rel.Split(Path.DirectorySeparatorChar)[0],
                             StringComparer.OrdinalIgnoreCase)) continue;
                     if (ExcludedFiles.Contains(Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)) continue;
+                    // 目标 zip 如果正好在实例目录里,别把正在写的自己打进去
+                    var full = Path.GetFullPath(f);
+                    if (string.Equals(full, Path.GetFullPath(targetZip), StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(full, Path.GetFullPath(tmp), StringComparison.OrdinalIgnoreCase)) continue;
                     AddFile(f, prefix + "/" + rel.Replace('\\', '/'));
                 }
             }
 
             AddTree(Path.Combine(versionsRoot, versionId), "versions/" + versionId);
-            AddTree(Path.Combine(instancesRoot, versionId), "instances/" + versionId);
+            // 外部隔离版本 / 共享根目录都要按实际实例目录导出,不能假设 instances/<id>
+            AddTree(instanceDir, "instances/" + versionId);
             AddTree(librariesRoot, "libraries");
         }
         if (File.Exists(targetZip)) File.Delete(targetZip);
