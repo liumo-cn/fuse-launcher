@@ -15,9 +15,62 @@ public static class VersionRange
         var current = Parse(version!);
         if (current == null) return true;
 
-        foreach (var clause in constraint!.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries))
+        // Forge / NeoForge 的 mods.toml 用 Maven 区间:[1.12.2,1.13)、[1.20,)、[1.20.1]
+        var maven = MatchMavenRanges(current, constraint!);
+        if (maven.HasValue) return maven.Value;
+
+        var clauses = constraint!.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries);
+
+        // Forge 的 mods.toml 里常见 "1.18 1.18.1 1.20.1" 这种纯版本列表,表示任一都行
+        if (clauses.Length > 1 &&
+            clauses.All(c => c.IndexOfAny(new[] { '<', '>', '=', '~', '^', '[', '(' }) < 0))
+            return clauses.Any(c => MatchesClause(current, c));
+
+        foreach (var clause in clauses)
         {
             if (!MatchesClause(current, clause)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>Maven 区间:返回 null 表示不是区间写法,继续走 Fabric 语义。</summary>
+    private static bool? MatchMavenRanges(Version current, string constraint)
+    {
+        var text = constraint.Trim();
+        if (text.IndexOf('[') < 0 && text.IndexOf('(') < 0) return null;
+
+        // [1.12.2,1.13) / [1.20,) / (,1.12.2] / 逗号分隔的多个区间
+        var intervals = System.Text.RegularExpressions.Regex.Matches(
+            text, @"([\[\(])([^,\]\)]*),([^\]\)]*)([\]\)])");
+        if (intervals.Count > 0)
+        {
+            foreach (System.Text.RegularExpressions.Match m in intervals)
+                if (InInterval(current, m)) return true;
+            return false;
+        }
+
+        // [1.12.2] 表示精确版本
+        var exact = System.Text.RegularExpressions.Regex.Match(text, @"^\[([^\[\],]+)\]$");
+        if (!exact.Success) return null;
+        var target = Parse(exact.Groups[1].Value.Trim());
+        return target == null ? null : current.CompareTo(target) == 0;
+    }
+
+    private static bool InInterval(Version current, System.Text.RegularExpressions.Match m)
+    {
+        var lower = Parse(m.Groups[2].Value.Trim());
+        var upper = Parse(m.Groups[3].Value.Trim());
+        if (lower == null && upper == null) return true;
+
+        if (lower != null)
+        {
+            var cmp = current.CompareTo(lower);
+            if (m.Groups[1].Value == "[" ? cmp < 0 : cmp <= 0) return false;
+        }
+        if (upper != null)
+        {
+            var cmp = current.CompareTo(upper);
+            if (m.Groups[4].Value == "]" ? cmp > 0 : cmp >= 0) return false;
         }
         return true;
     }

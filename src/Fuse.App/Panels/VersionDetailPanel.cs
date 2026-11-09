@@ -1493,13 +1493,16 @@ public class VersionDetailPanel : UserControl
             FontWeight = FontWeights.SemiBold,
             Foreground = T2,
         });
+        var canAnalyze = string.Equals(_loader, "fabric", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(_loader, "forge", StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(_loader, "neoforge", StringComparison.OrdinalIgnoreCase);
         host.Children.Add(new TextBlock
         {
-            // Forge/NeoForge 的模组元数据在 mods.toml，目前不解析。之前按 Fabric 规则硬判
-            // 会把整包模组当成"缺前置"，修一次反而删坏一次（zombie 整合包教训）。
-            Text = string.Equals(_loader, "fabric", StringComparison.OrdinalIgnoreCase)
-                ? "启动报 Incompatible mods 时，点这里自动分析缺前置/版本不匹配/重复安装，并给出一键修复。"
-                : "当前是 " + LoaderLabel() + " 实例：自动分析/修复目前只支持 Fabric（不解析 Forge 的 mods.toml，避免误删模组）。启动失败请用上面的「崩溃救援」。",
+            Text = !canAnalyze
+                ? "当前是 " + LoaderLabel() + " 实例：自动分析支持 Fabric / Forge / NeoForge。启动失败请用上面的「崩溃救援」。"
+                : string.Equals(_loader, "fabric", StringComparison.OrdinalIgnoreCase)
+                    ? "启动报 Incompatible mods 时，点这里自动分析缺前置/版本不匹配/重复安装，并给出一键修复。"
+                    : "启动报缺少前置或版本不匹配时，点这里分析 mods.toml 里的必需依赖、重复安装和 MC 版本不符，并给出一键修复（修复前自动备份 mods）。",
             FontSize = 11,
             Foreground = T2,
             Opacity = 0.66,
@@ -2636,14 +2639,15 @@ public class VersionDetailPanel : UserControl
     {
         try
         {
-            // 只对 Fabric 做自动修复。Forge/NeoForge 的模组元数据不在 fabric.mod.json,
-            // 强行分析会把正常模组全判成"缺前置",修一次坏一次。
-            if (!string.Equals(_loader, "fabric", StringComparison.OrdinalIgnoreCase))
+            var canAnalyze = string.Equals(_loader, "fabric", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(_loader, "forge", StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals(_loader, "neoforge", StringComparison.OrdinalIgnoreCase);
+            if (!canAnalyze)
             {
                 new InfoWindow("暂不支持自动修复",
                     "当前是 " + LoaderLabel() + " 实例。" + Environment.NewLine + Environment.NewLine +
-                    "自动分析/修复目前只支持 Fabric 模组：Forge / NeoForge 的依赖写在 mods.toml 里，" +
-                    "按 Fabric 规则判断会误删正常模组。" + Environment.NewLine + Environment.NewLine +
+                    "自动分析/修复支持 Fabric / Forge / NeoForge；Quilt 等加载器暂时只能看「崩溃救援」的日志。" +
+                    Environment.NewLine + Environment.NewLine +
                     "启动失败可以先用「崩溃救援」查看日志、进安全模式排查。")
                 { Owner = Window.GetWindow(this) }.ShowDialog();
                 return;

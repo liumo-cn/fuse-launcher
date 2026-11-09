@@ -178,7 +178,7 @@
 
   <div class="release">
     <span class="ver" id="release-version">v1.2.5</span>
-    <span class="notes" id="notes">下载引擎重写：分块断点续传、按类别测速选源、SHA-1 校验失败自动换源；整合包缺文件会给出手动清单和一键下载页。</span>
+    <span class="notes" id="notes">下载引擎重写：分块断点续传、按类别测速选源、SHA-1 校验失败自动换源；整合包缺文件会给出手动清单和一键下载页</span>
   </div>
 
   <h2>1.2.5 新增 <small>本次更新重点</small></h2>
@@ -186,45 +186,45 @@
     <div class="new">
       <span class="badge">重点</span>
       <h3>下载引擎重写</h3>
-      <p>大文件分块并发 + 断点续传；元数据、游戏对象、Maven 库、资源文件分类测速选源，SHA-1 对不上自动清断点换源重下。</p>
+      <p>大文件分块并发 + 断点续传；元数据、游戏对象、Maven 库、资源文件分类测速选源，SHA-1 对不上自动清断点换源重下</p>
     </div>
     <div class="new">
       <span class="badge">NEW</span>
-      <h3>CurseForge 整合包</h3>
-      <p>整合包本体、加载器、依赖和 overrides 自动补齐；作者禁止第三方 API 的模组会先装其余文件，再列出需要手动补的 jar。</p>
+      <h3>CurseForge整合包下载</h3>
+      <p>新增整合包本体、加载器、依赖和 overrides 自动补齐；会列出缺失的jar，这个没办法，模组作者不开放下载</p>
     </div>
     <div class="new">
       <span class="badge">NEW</span>
-      <h3>失败看得懂</h3>
-      <p>任务行直接显示还差几个模组，点「原因」看完整清单，可一键打开所有下载页和 mods 文件夹，不用自己找路径。</p>
+      <h3>知道失败原因</h3>
+      <p>任务行直接显示还差几个模组，点「原因」看完整清单，可一键打开所有下载页和 mods 文件夹，省的找路径</p>
     </div>
     <div class="new">
       <span class="badge">NEW</span>
       <h3>老版本兼容</h3>
-      <p>1.12.2 等老 Forge 精确使用 Java 8，本机没有就自动下载 jre-legacy；不再拿 Java 21 硬顶导致启动崩溃。</p>
+      <p>1.12.2 等老 Forge 精确使用 Java 8，本机没有就自动下载 jre-legacy；不再用Java 21导致启动崩溃</p>
     </div>
   </div>
 
-  <h2>它能做什么</h2>
+  <h2>能做什么</h2>
   <div class="features">
-    <div class="feature"><h3>下载与启动</h3><p>原版 / Fabric / Forge / NeoForge / OptiFine；分块续传、多源测速、逐个文件校验，缺 Java 自动补。</p></div>
-    <div class="feature"><h3>整合包</h3><p>Modrinth / CurseForge 整合包一键安装，支持 .mrpack / zip 导入、原地升级与回滚。</p></div>
-    <div class="feature"><h3>模组与光影</h3><p>模组启停、更新检查、冲突一键修复、版本切换；光影前置自动配对。</p></div>
-    <div class="feature"><h3>多游戏目录</h3><p>导入官方或第三方启动器目录；版本、下载、补全都跟随当前选中的目录。</p></div>
-    <div class="feature"><h3>存档与备份</h3><p>世界备份 / 还原、实例备份与复制，升级前自动留一份，坏了能退回去。</p></div>
-    <div class="feature"><h3>出问题能救</h3><p>崩溃分析、安全模式、自动补全文件、日志与崩溃报告内置查看。</p></div>
+    <div class="feature"><h3>下载与启动</h3><p>原版 / Fabric / Forge / NeoForge / OptiFine：缺 Java 自动补</p></div>
+    <div class="feature"><h3>整合包</h3><p>Modrinth / CurseForge 整合包一键安装，支持 .mrpack / zip 导入、原地升级与回滚</p></div>
+    <div class="feature"><h3>模组与光影</h3><p>modrinth/curseforge 模组光影材质下载。模组启停、更新检查、冲突一键修复、版本切换；光影前置自动配置</p></div>
+    <div class="feature"><h3>多游戏目录</h3><p>一键导入官方或第三方启动器目录；版本、下载、补全都跟随当前选中的目录</p></div>
+    <div class="feature"><h3>存档与备份</h3><p>世界备份 / 还原、实例备份与复制，升级前自动留一份，支持回退</p></div>
+    <div class="feature"><h3>更快解决问题</h3><p>崩溃分析、安全模式、自动补全文件、日志与崩溃报告内置查看</p></div>
   </div>
 
-  <h2>下载说明 <small>文件是怎么下来的</small></h2>
+  <h2>下载说明 <small>文件下载</small></h2>
   <div class="guide">
     <ul>
-      <li><b>分块 + 断点续传</b>：大文件切成块并发下载；暂停、关掉启动器后再继续，不用从头重下。</li>
-      <li><b>按类别测速选源</b>：元数据、游戏对象、Maven 库、资源文件分开选源；Mojang 官方、BMCLAPI、USTC、CERNET 哪个快走哪个，失败自动换下一个。</li>
-      <li><b>逐个文件校验</b>：SHA-1 不一致就丢掉重下，不会把坏文件留在游戏目录；校验通过的文件进入共享缓存，多个游戏目录同盘硬链接、跨盘复制。</li>
-      <li><b>安装包和加载器</b>：原版、Fabric、Forge、NeoForge、OptiFine 统一走任务队列；加载器 installer 也分块下载并校验，失败逐个换源。</li>
-      <li><b>整合包</b>：Modrinth / CurseForge 一键安装；CurseForge 会先下 pack zip，再按 manifest 补齐模组、依赖和 overrides。安装过程可以暂停。</li>
-      <li><b>下不动的文件</b>：作者禁止第三方 API 下载的模组不会让整包白装；其余文件照常完成，任务行提示还差几个，点「原因」能看清单并一键打开下载页。</li>
-      <li><b>失败重试</b>：重试前会检查手动补的文件是否已经在 mods 里，已经就位就直接算完成，不重复下载整包。</li>
+      <li><b>分块 + 断点续传</b>：大文件切成块并发下载；暂停、关掉启动器后再继续，不用重下。</li>
+      <li><b>按类别测速选源</b>：元数据、游戏对象、Maven 库、资源文件分开选源；Mojang 官方、BMCLAPI、USTC、CERNET 哪个快走哪个，失败换下一个</li>
+      <li><b>逐个文件校验</b>：SHA-1 不一致就丢掉重下，不把坏文件留在游戏目录；校验通过的文件进入共享缓存，多个游戏目录同盘硬链接、跨盘复制</li>
+      <li><b>安装包和加载器</b>：原版、Fabric、Forge、NeoForge、OptiFine 统一走任务队列；加载器 installer 也分块下载并校验，失败挨个换源</li>
+      <li><b>整合包</b>：Modrinth / CurseForge 一键安装；CurseForge 会先下 pack zip，再按 manifest 补齐模组、依赖和 overrides。安装过程可以暂停</li>
+      <li><b>下不动的文件</b>：作者禁止第三方 API 下载的模组不会让整包白装；其余文件照常完成，任务行提示还差几个，点「原因」能看清单并一键打开下载页</li>
+      <li><b>失败重试</b>：重试前会检查手动补的文件是否已经在 mods 里，已经就位就直接算完成，不重复下载整包</li>
     </ul>
   </div>
 
@@ -238,12 +238,12 @@
     <div class="step">
       <div class="n">STEP 02</div>
       <h3>运行安装</h3>
-      <p>选择安装目录和游戏目录（默认在文档下）。想放 U 盘或多机使用，可勾选「便携模式」。</p>
+      <p>选择安装目录和游戏目录（默认在C盘文档下，不过我推荐放在D盘）。想放 U 盘或多机使用，可勾选「便携模式」</p>
     </div>
     <div class="step">
       <div class="n">STEP 03</div>
       <h3>启动并下载游戏</h3>
-      <p>安装完成后自动打开启动器。点「下载」花瓣选择版本，装好点大圆即可开始。</p>
+      <p>安装完成后自动打开启动器。点「下载」选择版本，在游戏版本页选择版本启动，启动器会记住上一次启动的版本，点击中心圆可以快速进入</p>
     </div>
   </div>
 
@@ -263,8 +263,6 @@
   var dl = document.getElementById('download');
   var copy = document.getElementById('copy');
 
-  // 页面可能放在 OSS 自定义域名下（相对路径可用），也可能放在自己的服务器上
-  // （相对路径没有 /fuse/，需要回退到 OSS 绝对地址；清单读取需要 OSS CORS）。
   var OSS_BASE = 'https://fuse-launcher-update.oss-cn-guangzhou.aliyuncs.com';
   dl.href = OSS_BASE + '/fuse/FuseLauncher-Setup-latest.exe';
 
@@ -280,8 +278,6 @@
     });
   }
 
-  // 先试相对路径（页面和清单同源/有反向代理时最稳），失败再试 OSS 绝对地址，
-  // 两次都失败就保留页面里的静态默认值。
   getManifest('fuse/manifest.json')
     .catch(function () { return getManifest(OSS_BASE + '/fuse/manifest.json'); })
     .then(function (m) {

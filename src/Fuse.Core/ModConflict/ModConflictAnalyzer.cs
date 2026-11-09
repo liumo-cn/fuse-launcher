@@ -59,17 +59,17 @@ public static class ModConflictAnalyzer
     private static readonly HashSet<string> BuiltIns = new(StringComparer.OrdinalIgnoreCase)
     {
         "minecraft", "fabricloader", "fabric-loader", "java", "fabric", "quilt_loader", "quilt-loader",
+        // Forge / NeoForge 自己的依赖,不是独立模组
+        "forge", "neoforge", "fml", "javafml", "lowcodefml", "mcp",
     };
 
     public static ModConflictReport Analyze(string modsDir, string gameVersion, string loader,
         string? errorText = null)
     {
-        // 目前只解析 fabric.mod.json。Forge/NeoForge 的元数据在 META-INF/mods.toml,
-        // 硬按 Fabric 规则分析会把 Forge 整合包误判成缺一堆前置,甚至装进错误的 jar。
-        if (!string.IsNullOrEmpty(loader) &&
-            !loader.Equals("fabric", StringComparison.OrdinalIgnoreCase))
-            return new ModConflictReport { GameVersion = gameVersion, Loader = loader };
-        var all = ModScanner.Scan(modsDir);
+        // Fabric 用 fabric.mod.json,Forge/NeoForge 用 META-INF/mods.toml(或 neoforge.mods.toml),
+        // 1.12.2 老包用 mcmod.info;ModScanner 统一成同一种结构后再判。
+        var isFabric = loader.Equals("fabric", StringComparison.OrdinalIgnoreCase);
+        var all = ModScanner.Scan(modsDir, loader);
         var enabled = all.Where(m => !m.Disabled && !string.IsNullOrEmpty(m.Id)).ToList();
         var actions = new List<ModFixAction>();
 
@@ -166,16 +166,21 @@ public static class ModConflictAnalyzer
                     InstalledSha1 = mod.Sha1,
                     Constraint = "",
                     RequiredGameVersion = gameVersion,
-                    DisableIfNoReplacement = true,
+                    // Fabric 找不到替代就禁用;Forge/NeoForge 不自动禁用(很多包只在 CF 有,误判代价大)
+                    DisableIfNoReplacement = isFabric,
                     CanAutoFix = true,
                     Reason = $"{mod.Name} {mod.Version} 只支持 Minecraft {mcRange}，当前是 {gameVersion}；" +
-                             $"尝试升级到适配 {gameVersion} 的版本，没有则禁用",
+                             (isFabric
+                                 ? $"尝试升级到适配 {gameVersion} 的版本，没有则禁用"
+                                 : $"尝试升级到适配 {gameVersion} 的版本，找不到不会自动禁用"),
                 });
             }
         }
 
-        // 3) 合并 Fabric 报错文本里的线索(中英双语):静态分析漏掉时兜底
+        // 3) 合并 Fabric 报错文本里的线索(中英双语):静态分析漏掉时兜底。
+        //    Forge/NeoForge 的日志格式不同,这版只用 mods.toml 静态分析。
         string? suggestedGame = suggestedGameCandidate;
+        if (isFabric)
         foreach (var hint in FabricErrorParser.Parse(errorText))
         {
             switch (hint.Kind)
