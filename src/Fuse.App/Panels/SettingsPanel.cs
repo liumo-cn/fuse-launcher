@@ -396,8 +396,20 @@ public class SettingsPanel : UserControl
         verRow.Children.Add(_updateBtn);
         root.Children.Add(Wrap("verRow", verRow, out _));
 
-        // 5 版本隔离(只读)
-        root.Children.Add(ReadOnlyRow("版本隔离", "完全隔离"));
+        // 5 版本隔离(只读):自建实例永远完全隔离;外部目录由它自己的启动器决定
+        var managedLayout = AppServices.IsManagedLayout(AppServices.ActiveGameDirectory);
+        root.Children.Add(ReadOnlyRow("版本隔离", managedLayout ? "完全隔离" : "跟随外部目录"));
+        if (!managedLayout)
+        {
+            root.Children.Add(new TextBlock
+            {
+                Text = "当前游戏目录来自外部启动器，是否隔离由它的版本设置决定；" +
+                       "没开隔离的版本可在 详情 → 模组 页点「开启版本隔离」。",
+                FontSize = 11, Foreground = T2, Opacity = 0.66,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(2, -2, 2, 8),
+            });
+        }
 
         // 6 自定义(色环取色,FR-12)
         root.Children.Add(new TextBlock
