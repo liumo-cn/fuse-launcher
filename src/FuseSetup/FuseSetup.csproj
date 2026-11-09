@@ -7,7 +7,7 @@
     <RootNamespace>FuseSetup</RootNamespace>
     <AssemblyName>FuseSetup</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>1.2.5</Version>
+    <Version>1.2.6</Version>
     <Product>Fuse Launcher Setup</Product>
     <Company>liumo</Company>
     <ApplicationIcon>fuse.ico</ApplicationIcon>

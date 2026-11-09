@@ -1,5 +1,14 @@
 # 更新日志
 
+## 1.2.6 — 2026-11-09
+
+- 模组冲突修复支持 Forge / NeoForge：解析 `mods.toml`、`neoforge.mods.toml`
+  和 1.12.2 的 `mcmod.info`，检查缺必需前置、重复 mod id 和 MC 版本范围不符。
+- 合并 jar 按当前加载器选元数据（Forge 不再误读 fabric.mod.json）；
+  jar-in-jar 的子模组算“已提供”，不会把 KotlinForForge 这类 bundle 报成缺前置。
+- Forge 的纯版本约束（如 `2.11.20`）按最低版本处理，避免把新版本误报成不兼容；
+  MC 版本不符时只尝试升级，找不到替代不会自动禁用。
+
 ## 1.2.5 — 2026-11-08
 
 - 修复外部版本隔离目录被误判成 instances 布局：版本详情 0 模组、
