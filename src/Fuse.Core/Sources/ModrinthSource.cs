@@ -52,6 +52,15 @@ public static class ModrinthSource
 
     public const string ApiBase = "https://api.modrinth.com/v2";
 
+    /// <summary>
+    /// 研究开关(默认关闭):设 FUSE_RESEARCH_MODRINTH_BASE 环境变量可把搜索/版本标签指向本地 mock,
+    /// 仅供 ai-quality-sprint/research 实验使用;未设置时行为与常量 ApiBase 完全一致(liumo-guard/1.0)。
+    /// </summary>
+    private static string ResearchApiBase =>
+        Environment.GetEnvironmentVariable("FUSE_RESEARCH_MODRINTH_BASE") is { Length: > 0 } researchBase
+            ? researchBase.TrimEnd('/')
+            : ApiBase;
+
     // tag/game_version 只拉一次:版本组展开(见 ExpandGameVersionsAsync)每次搜索都要用
     private static List<string>? _gameVersionTags;
 
@@ -67,7 +76,7 @@ public static class ModrinthSource
         {
             try
             {
-                using var request = new HttpRequestMessage(HttpMethod.Get, $"{ApiBase}/tag/game_version");
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"{ResearchApiBase}/tag/game_version");
                 request.Headers.UserAgent.ParseAdd("FuseLauncher/1.0.0 Java/17.0.15 (Windows 10; x64; minecraft launcher)");
                 using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
@@ -113,7 +122,7 @@ public static class ModrinthSource
         // 有搜索词时按相关性排(名称匹配的靠前),纯浏览仍按下载量降序
         var sort = string.IsNullOrWhiteSpace(query) ? "downloads" : "relevance";
         using var request = new HttpRequestMessage(HttpMethod.Get,
-            $"{ApiBase}/search?query={Uri.EscapeDataString(query ?? "")}" +
+            $"{ResearchApiBase}/search?query={Uri.EscapeDataString(query ?? "")}" +
             $"&limit={limit}&offset={offset}&index={sort}&facets={Uri.EscapeDataString(facets.ToString(Newtonsoft.Json.Formatting.None))}");
         request.Headers.UserAgent.ParseAdd("FuseLauncher/1.0.0 Java/17.0.15 (Windows 10; x64; minecraft launcher)");
         using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
