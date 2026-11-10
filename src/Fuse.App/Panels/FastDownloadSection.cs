@@ -110,6 +110,14 @@ public sealed class FastDownloadSection : UserControl
                 Hint("先粘贴链接", danger: true);
                 return;
             }
+            // 只放行 http/https:ShellExecute 对任意字符串会按系统协议处理,
+            // 粘贴 UNC 路径(\\server\share\x.exe)等于执行远程程序(liumo-guard/1.0)
+            if (!System.Uri.TryCreate(url, System.UriKind.Absolute, out var uri) ||
+                (uri.Scheme != "http" && uri.Scheme != "https"))
+            {
+                Hint("只支持 http/https 链接", danger: true);
+                return;
+            }
             try
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url)

@@ -12,6 +12,7 @@ using Xunit;
 namespace Fuse.Core.Tests;
 
 /// <summary>CurseForge 整合包在队列内转 mrpack:manifest 解析、index 生成、overrides 复制。</summary>
+[Collection("CurseForge")]
 public class CurseForgePackTests : IDisposable
 {
     private readonly string _dir;

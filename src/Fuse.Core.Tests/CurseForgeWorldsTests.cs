@@ -6,6 +6,7 @@ using Xunit;
 namespace Fuse.Core.Tests;
 
 /// <summary>地图(Worlds/classId 17)接入:类型映射、网页地址、分类列表解析。</summary>
+[Collection("CurseForge")]
 public class CurseForgeWorldsTests : IDisposable
 {
     public void Dispose() => CurseForgeSource.Configure(null);
