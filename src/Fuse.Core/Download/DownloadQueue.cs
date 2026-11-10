@@ -466,6 +466,12 @@ public sealed class DownloadQueue
                 return;
             }
 
+            if (record.Kind == "map-install")
+            {
+                await ExecuteMapInstallAsync(record, progress, cancellation).ConfigureAwait(false);
+                return;
+            }
+
             if (record.Kind == "optifine-install")
             {
                 await ExecuteOptiFineInstallAsync(record, progress, cancellation).ConfigureAwait(false);
@@ -604,6 +610,65 @@ public sealed class DownloadQueue
             [JsonProperty("cfFileId")] public int CurseForgeFileId { get; set; }
             [JsonProperty("cfDownloadUrl")] public string? CurseForgeDownloadUrl { get; set; }
             [JsonProperty("cfSha1")] public string? CurseForgeSha1 { get; set; }
+        }
+
+        /// <summary>地图安装:队列内下载世界 zip → 解压定位 level.dat → 移入 saves(Meta 由版本详情页构建)。</summary>
+        private sealed class MapInstallMeta
+        {
+            public string? SavesDir { get; set; }
+            public string? InstanceDir { get; set; }
+            public string? ProjectId { get; set; }
+            public string? Source { get; set; }
+            public string? ZipName { get; set; }
+            public string? Title { get; set; }
+        }
+
+        /// <summary>
+        /// 地图安装:zip 分块下载(几十到几百 MB)→ 解压定位 level.dat → 重名加后缀移入 saves → 记录。
+        /// zip 落在 saves 同盘的临时名,移动才是纯改名;暂停重试会整段重来(与整合包安装一致)。
+        /// </summary>
+        private async Task ExecuteMapInstallAsync(
+            DownloadTaskRecord record, IProgress<double> progress, CancellationToken cancellation)
+        {
+            var meta = JsonConvert.DeserializeObject<MapInstallMeta>(record.Meta ?? "{}")
+                       ?? new MapInstallMeta();
+            var savesDir = meta.SavesDir;
+            var instanceDir = meta.InstanceDir;
+            if (string.IsNullOrEmpty(savesDir) || string.IsNullOrEmpty(instanceDir) ||
+                string.IsNullOrEmpty(record.SourceUrl))
+                throw new InvalidOperationException("地图安装任务缺少必要参数");
+            Directory.CreateDirectory(savesDir);
+            var zipPath = string.IsNullOrEmpty(record.DestPath)
+                ? Path.Combine(savesDir, ".fuse-mapdl-" + Guid.NewGuid().ToString("N") + ".zip")
+                : record.DestPath;
+            try
+            {
+                // 1. 下载 zip(0~92%)
+                var chunked = new ChunkedDownloader(_http);
+                await chunked.DownloadAsync(
+                    record.SourceUrl, zipPath, record.ExpectedHash,
+                    new ChunkedDownloadOptions { Parallelism = 4 },
+                    ToScaled(progress, 0.00, 0.92), cancellation).ConfigureAwait(false);
+                progress.Report(0.92);
+
+                // 2. 解压 → 定位世界 → 移入 saves → 记录(92~100%)
+                var worldName = MapInstaller.Install(
+                    zipPath, savesDir, instanceDir,
+                    meta.Source ?? "curseforge", meta.ProjectId ?? "", record.ExpectedHash,
+                    meta.ZipName ?? record.Name, ToScaled(progress, 0.92, 0.08), cancellation);
+                Trace("map install: " + (meta.Title ?? meta.ZipName) + " → saves/" + worldName);
+                progress.Report(1.0);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(zipPath)) File.Delete(zipPath);
+                }
+                catch (IOException)
+                {
+                }
+            }
         }
 
         /// <summary>

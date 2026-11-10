@@ -61,7 +61,7 @@ public class VersionDetailPanel : UserControl
     private int _generation;
 
     private string _tab = "mods";
-    // 浏览类页签(模组/光影/材质):类型筛选按页签记忆;搜索词不跨页复用
+    // 浏览类页签(模组/光影/材质/地图):类型筛选按页签记忆;搜索词不跨页复用
     private readonly Dictionary<string, string> _catByTab = new();
     private string _browseProjectType = "mod";   // Modrinth project_type
     private string _browseDestDir = "";          // 光影/材质落盘目录
@@ -109,6 +109,9 @@ public class VersionDetailPanel : UserControl
     private FrameworkElement? _jvmCard;
     private FrameworkElement? _backupCard;
     private string[] _browseCategories = Categories;
+    // 地图分类:CF Worlds 的分类 id 不硬编码,进程内拉一次(失败本次会话就只有「全部」)
+    private static List<Fuse.Core.Sources.CfCategory>? _worldCategories;
+    private static bool _worldCategoriesTried;
     private string _localDirKind = "mods";       // 本地页当前目录
     private bool _shaderPrePending;              // 光影前置已入队(用于卡片状态)
     private string _loader = "";      // ""=原版实例, "fabric" / "forge" / "neoforge"
@@ -327,14 +330,15 @@ public class VersionDetailPanel : UserControl
     {
         _root.Children.Clear();
         var chips = new Grid { Margin = new Thickness(0, 0, 0, 10) };
-        for (var i = 0; i < 6; i++)
+        for (var i = 0; i < 7; i++)
             chips.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         AddChip(chips, "修改", "modify", 0);
         AddChip(chips, "模组", "mods", 1);
         AddChip(chips, "光影", "shaders", 2);
         AddChip(chips, "材质", "resourcepacks", 3);
-        AddChip(chips, "本地", "local", 4);
-        AddChip(chips, "导出", "export", 5);
+        AddChip(chips, "地图", "maps", 4);
+        AddChip(chips, "本地", "local", 5);
+        AddChip(chips, "导出", "export", 6);
         _root.Children.Add(chips);
         // 内容区整体可滚动:修改页加了崩溃救援/备份后远超面板高度,
         // 不套 ScrollViewer 会被窗口 MaxHeight 直接裁掉(用户反馈"页面查看不全")
@@ -393,6 +397,7 @@ public class VersionDetailPanel : UserControl
         else if (_tab == "export") BuildExportTab();
         else if (_tab == "shaders") BuildBrowseTab("shaders");
         else if (_tab == "resourcepacks") BuildBrowseTab("resourcepacks");
+        else if (_tab == "maps") BuildMapsTab();
         else BuildModsTab();
     }
 
@@ -3676,6 +3681,81 @@ public class VersionDetailPanel : UserControl
         BuildBrowseUi(isModsTab: false);
     }
 
+    /// <summary>地图页:CurseForge Worlds(classId 17),下载后解压进当前版本的 saves。</summary>
+    private void BuildMapsTab()
+    {
+        _browseProjectType = "world";
+        _browseDestDir = SavesDir();
+        _browseCategories = WorldCategoryKeys();
+        if (!CurseForgeSource.IsConfigured)
+        {
+            _content.Children.Add(new TextBlock
+            {
+                Text = "地图源是 CurseForge，当前构建未注入 API Key，地图下载暂不可用",
+                FontSize = 12, Foreground = T2, Margin = new Thickness(2, 0, 0, 8),
+            });
+            return;
+        }
+        BuildBrowseUi(isModsTab: false);
+        EnsureWorldCategoriesLoaded();
+    }
+
+    private string[] WorldCategoryKeys() =>
+        _worldCategories?.Where(c => c.Id > 0).Select(c => c.Id.ToString()).ToArray()
+        ?? Array.Empty<string>();
+
+    /// <summary>CF Worlds 分类拉一次(进程内);拿到后重建页签把类型下拉补全。</summary>
+    private void EnsureWorldCategoriesLoaded()
+    {
+        if (_worldCategoriesTried) return;
+        _worldCategoriesTried = true;
+        var gen = _generation;
+        _ = Task.Run(async () =>
+        {
+            List<Fuse.Core.Sources.CfCategory> cats;
+            try
+            {
+                cats = await CurseForgeSource.CategoriesAsync(
+                    CurseForgeSource.ClassWorlds, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                WidgetWindow.Boot("[maps] load categories failed: " + ex.Message);
+                return;
+            }
+            _worldCategories = cats;
+            await Dispatcher.InvokeAsync(new Action(() =>
+            {
+                if (gen == _generation) RenderTab();
+            }));
+        });
+    }
+
+    /// <summary>地图分类标签:CF 的英文名按关键词映射中文,没命中就显示原名。</summary>
+    private string MapCategoryLabel(string key)
+    {
+        var cat = _worldCategories?.FirstOrDefault(c => c.Id.ToString() == key);
+        return cat == null ? key : WorldCategoryLabel(cat.Name);
+    }
+
+    private static string WorldCategoryLabel(string name)
+    {
+        var n = (name ?? "").ToLowerInvariant();
+        if (n.Contains("adventure")) return "冒险";
+        if (n.Contains("survival")) return "生存";
+        if (n.Contains("creation")) return "创造";
+        if (n.Contains("parkour")) return "跑酷";
+        if (n.Contains("puzzle")) return "解谜";
+        if (n.Contains("minigame")) return "小游戏";
+        if (n.Contains("horror")) return "恐怖";
+        if (n.Contains("hardcore")) return "硬核";
+        if (n.Contains("pvp")) return "PvP";
+        if (n.Contains("game map")) return "游戏地图";
+        if (n.Contains("experimental")) return "实验性";
+        if (n.Contains("modded")) return "模组化";
+        return name;
+    }
+
     private void BuildBrowseUi(bool isModsTab)
     {
         if (isModsTab) _browseCategories = Categories;
@@ -3735,7 +3815,9 @@ public class VersionDetailPanel : UserControl
         });
         _typeValueText = new TextBlock
         {
-            Text = _category == "全部" ? "全部" : CategoryLabel(_category),
+            Text = _category == "全部" ? "全部"
+                : _browseProjectType == "world" ? MapCategoryLabel(_category)
+                : CategoryLabel(_category),
             FontSize = 12, Margin = new Thickness(0, 0, 8, 0),
             Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
             VerticalAlignment = VerticalAlignment.Center,
@@ -3889,7 +3971,8 @@ public class VersionDetailPanel : UserControl
         var options = new StackPanel();
         options.Children.Add(CategoryOption("全部", "全部"));
         foreach (var c in _browseCategories)
-            options.Children.Add(CategoryOption(CategoryLabel(c), c));
+            options.Children.Add(CategoryOption(
+                _browseProjectType == "world" ? MapCategoryLabel(c) : CategoryLabel(c), c));
 
         var scroller = new ScrollViewer
         {
@@ -4381,7 +4464,18 @@ public class VersionDetailPanel : UserControl
                 var effectiveQuery = ModLocalization.ToEnglishQuery(query) ?? query;
                 List<ModrinthHit> hits;
                 int total;
-                if (_source == "curseforge")
+                if (_browseProjectType == "world")
+                {
+                    // 地图只走 CurseForge Worlds;不带 gameVersion(大量地图不标注适配版本,带了会把结果滤空)
+                    var cf = await CurseForgeSource.SearchAsync(
+                        effectiveQuery, "", "", category, offset, 20,
+                        CancellationToken.None, "world").ConfigureAwait(false);
+                    hits = cf.Hits.Select(h => new ModrinthHit(
+                        h.Id.ToString(), h.Slug, h.Name, h.Summary, h.Downloads,
+                        h.ProjectType, h.IconUrl ?? "", "")).ToList();
+                    total = cf.Total;
+                }
+                else if (_source == "curseforge")
                 {
                     var ldr = _browseProjectType == "mod" ? _loader : "";
                     var cf = await CurseForgeSource.SearchAsync(
@@ -4411,7 +4505,9 @@ public class VersionDetailPanel : UserControl
                     if (_offset == 0) _modList.Children.Clear();
                     if (hits.Count == 0 && _offset == 0)
                     {
-                        _modList.Children.Add(Hint("没有找到适配 " + _gameVersion + " 的模组"));
+                        _modList.Children.Add(Hint(_browseProjectType == "world"
+                            ? "没有找到相关地图"
+                            : "没有找到适配 " + _gameVersion + " 的模组"));
                         return;
                     }
                     // 第一页本地重排:用映射后的英文名评分(中文关键词比不过英文标题)
@@ -4549,7 +4645,8 @@ public class VersionDetailPanel : UserControl
         }
         info.Children.Add(titleRow);
         var date = hit.DateModified.Length >= 10 ? hit.DateModified.Substring(0, 10) : hit.DateModified;
-        var sourceLabel = _source == "curseforge" ? "CurseForge" : "Modrinth";
+        var source = RowSource();
+        var sourceLabel = source == "curseforge" ? "CurseForge" : "Modrinth";
         info.Children.Add(new TextBlock
         {
             Text = date.Length > 0
@@ -4575,7 +4672,7 @@ public class VersionDetailPanel : UserControl
             Padding = new Thickness(0),
             Margin = new Thickness(0, 0, 4, 0),
             VerticalAlignment = VerticalAlignment.Center,
-            ToolTip = _source == "curseforge" ? "在 CurseForge 打开" : "在 Modrinth 打开",
+            ToolTip = source == "curseforge" ? "在 CurseForge 打开" : "在 Modrinth 打开",
             Content = new TextBlock
             {
                 Text = "",
@@ -4587,8 +4684,8 @@ public class VersionDetailPanel : UserControl
             },
         };
         System.Windows.Automation.AutomationProperties.SetName(web,
-            (_source == "curseforge" ? "在 CurseForge 打开 " : "在 Modrinth 打开 ") + hit.Title);
-        web.Click += (_, _) => OpenProjectPage(_source, hit.Slug, _browseProjectType);
+            (source == "curseforge" ? "在 CurseForge 打开 " : "在 Modrinth 打开 ") + hit.Title);
+        web.Click += (_, _) => OpenProjectPage(source, hit.Slug, _browseProjectType);
         actions.Children.Add(web);
 
         var dl = new Button
@@ -4609,10 +4706,14 @@ public class VersionDetailPanel : UserControl
         return row;
     }
 
+    /// <summary>行来源:地图只有 CurseForge 一家,其它页签跟随用户选的下载源。</summary>
+    private string RowSource() => _browseProjectType == "world" ? "curseforge" : _source;
+
     private string BrowseKind() => _browseProjectType switch
     {
         "shader" => "shader",
         "resourcepack" => "resourcepack",
+        "world" => "map",
         _ => "mod",
     };
 
@@ -4620,6 +4721,7 @@ public class VersionDetailPanel : UserControl
     {
         "shader" => System.IO.Path.Combine(InstDir(), "shaderpacks"),
         "resourcepack" => System.IO.Path.Combine(InstDir(), "resourcepacks"),
+        "map" => SavesDir(),
         _ => ModsDir(),
     };
 
@@ -4692,12 +4794,18 @@ public class VersionDetailPanel : UserControl
     {
         if (!SharedGameDirectory()) return true;
         var kind = BrowseKind();
-        var dirName = kind == "mod" ? "mods" : kind == "shader" ? "shaderpacks" : "resourcepacks";
-        var confirm = new ConfirmWindow("共用目录",
-            "当前版本没有开启版本隔离。\n\n「" + title + "」会装进所有没开隔离的版本都会读取的共用 " +
-            dirName + " 目录，装错版本会让其它版本启动失败。\n\n" +
-            "建议先在页面顶部点「开启版本隔离」。",
-            "仍然安装", danger: true);
+        var dirName = kind == "mod" ? "mods"
+            : kind == "shader" ? "shaderpacks"
+            : kind == "map" ? "saves"
+            : "resourcepacks";
+        // 地图放错目录不会让别的版本起不来,只是大家都能看到,文案跟着松一点
+        var body = kind == "map"
+            ? "当前版本没有开启版本隔离。\n\n「" + title + "」会装进所有没开隔离的版本都会读取的共用 saves 目录，其他版本也会看到这张地图。\n\n" +
+              "建议先在页面顶部点「开启版本隔离」。"
+            : "当前版本没有开启版本隔离。\n\n「" + title + "」会装进所有没开隔离的版本都会读取的共用 " +
+              dirName + " 目录，装错版本会让其它版本启动失败。\n\n" +
+              "建议先在页面顶部点「开启版本隔离」。";
+        var confirm = new ConfirmWindow("共用目录", body, "仍然安装", danger: true);
         return Show(confirm) == true;
     }
 
@@ -4726,6 +4834,12 @@ public class VersionDetailPanel : UserControl
         {
             try
             {
+                if (kind == "map")
+                {
+                    await DownloadMapAsync(hit, state).ConfigureAwait(false);
+                    await Dispatcher.InvokeAsync(new Action(() => ReconcileDownload(state)));
+                    return;
+                }
                 if (_source == "curseforge")
                 {
                     await DownloadCurseForgeAsync(hit, state).ConfigureAwait(false);
@@ -4787,6 +4901,51 @@ public class VersionDetailPanel : UserControl
                 }));
             }
         });
+    }
+
+    /// <summary>
+    /// 地图下载:取 CF Worlds 文件 → 单个 map-install 任务(队列内下载 zip → 解压 → 移入 saves)。
+    /// 成功记录(世界文件夹名)由队列侧写入,所以这里不调 ContentRecordStore。
+    /// </summary>
+    private async Task DownloadMapAsync(ModrinthHit hit, ItemDownloadState state)
+    {
+        if (!CurseForgeSource.IsConfigured)
+            throw new InvalidOperationException("CurseForge 未启用（构建时未注入 API Key）");
+        if (!int.TryParse(hit.ProjectId, out var projectId))
+            throw new InvalidOperationException("CurseForge 项目 id 无效");
+
+        // 文件不按 gameVersion 过滤(同搜索:大量地图不标注适配版本)
+        var files = await CurseForgeSource.GetFilesAsync(projectId, "", "", CancellationToken.None)
+            .ConfigureAwait(false);
+        var main = files.FirstOrDefault(f => !string.IsNullOrWhiteSpace(f.DownloadUrl));
+        if (main == null)
+            throw new InvalidOperationException("作者未授权第三方下载，请点网页按钮到 CurseForge 下载");
+
+        var savesDir = SavesDir();
+        Directory.CreateDirectory(savesDir);
+        var task = AppServices.Queue!.Enqueue(new Fuse.Core.Download.DownloadTaskRecord
+        {
+            Name = string.IsNullOrWhiteSpace(main.DisplayName) ? main.FileName : main.DisplayName,
+            Kind = "map-install",
+            SourceUrl = main.DownloadUrl!,
+            // zip 落在 saves 同盘的点开头临时名,解压后的移动才是纯改名;装完由任务自己删
+            DestPath = System.IO.Path.Combine(
+                savesDir, ".fuse-mapdl-" + Guid.NewGuid().ToString("N").Substring(0, 12) + ".zip"),
+            ExpectedHash = string.IsNullOrWhiteSpace(main.Sha1) ? null : main.Sha1,
+            Meta = Newtonsoft.Json.JsonConvert.SerializeObject(new
+            {
+                savesDir,
+                instanceDir = InstDir(),
+                projectId = hit.ProjectId,
+                source = "curseforge",
+                zipName = main.FileName,
+                title = hit.Title,
+            }),
+        });
+        DownloadFocus.Register(task.TaskId, "version-detail");
+        state.TaskIds.Add(task.TaskId);
+        state.MainTaskIds.Add(task.TaskId);
+        state.MainFileName = main.FileName;   // 仅展示用;地图的成功记录在队列侧落盘
     }
 
     /// <summary>CurseForge 下载:只使用 API 返回的 downloadUrl,并带上一级 required 依赖。</summary>
@@ -4887,7 +5046,8 @@ public class VersionDetailPanel : UserControl
 
     private void CompleteDownload(ItemDownloadState state)
     {
-        if (!string.IsNullOrEmpty(state.MainFileName))
+        // 地图的安装记录(世界文件夹名,解压后才知道)由队列侧写入,这里只记普通文件
+        if (!string.IsNullOrEmpty(state.MainFileName) && state.Kind != "map")
         {
             Fuse.Core.Sources.ContentRecordStore.Record(
                 InstDir(), state.Source, state.ProjectId, state.MainFileName, state.Kind, null);
@@ -5419,6 +5579,7 @@ public class VersionDetailPanel : UserControl
     {
         var saves = Directory.Exists(dir)
             ? new DirectoryInfo(dir).GetDirectories()
+                .Where(d => !d.Name.StartsWith(".", StringComparison.Ordinal))   // 跳过 .fuse-map-* 安装临时目录
                 .OrderByDescending(d => d.LastWriteTime).ToList()
             : new List<DirectoryInfo>();
         var list = new StackPanel();

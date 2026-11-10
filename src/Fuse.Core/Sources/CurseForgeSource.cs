@@ -25,6 +25,9 @@ public sealed record CfFile(
 /// <summary>CurseForge 依赖关系(relationType: 1=embedded, 2=optional, 3=required, ...)。</summary>
 public sealed record CfDependency(int ModId, int RelationType);
 
+/// <summary>CurseForge 分类。地图(Worlds)的分类 id 不硬编码,由 CategoriesAsync 运行时拉取。</summary>
+public sealed record CfCategory(int Id, string Slug, string Name);
+
 /// <summary>
 /// CurseForge 官方 API 接入骨架(需要 API Key 才能工作)。
 ///
@@ -44,6 +47,7 @@ public static class CurseForgeSource
     public const int ClassModpacks = 4471;
     public const int ClassShaders = 6552;
     public const int ClassResourcePacks = 12;
+    public const int ClassWorlds = 17;
 
     private static ICurseForgeTransport? _transport;
     private static readonly object Gate = new();
@@ -85,12 +89,13 @@ public static class CurseForgeSource
         ["32x"] = 394, ["16x"] = 393,
     };
 
-    /// <summary>模组/整合包/光影/材质 → classId。</summary>
+    /// <summary>模组/整合包/光影/材质/地图 → classId。</summary>
     public static int ClassIdFor(string projectType) => projectType switch
     {
         "modpack" => ClassModpacks,
         "shader" => ClassShaders,
         "resourcepack" => ClassResourcePacks,
+        "world" => ClassWorlds,
         _ => ClassMods,
     };
 
@@ -102,6 +107,7 @@ public static class CurseForgeSource
             "modpack" => "modpacks",
             "shader" => "shaders",
             "resourcepack" => "texture-packs",
+            "world" => "worlds",
             _ => "mc-mods",
         };
         return $"https://www.curseforge.com/minecraft/{section}/{slug}";
@@ -196,6 +202,20 @@ public static class CurseForgeSource
         return json.Value<string>("data");
     }
 
+    /// <summary>某 classId 下的分类列表(地图页类型下拉用;走 GetJsonAsync 的 10 分钟缓存)。</summary>
+    public static async Task<List<CfCategory>> CategoriesAsync(int classId, CancellationToken ct)
+    {
+        var json = await GetJsonAsync(
+            ApiBase + "/categories?gameId=" + MinecraftGameId + "&classId=" + classId, ct).ConfigureAwait(false);
+        var list = new List<CfCategory>();
+        foreach (var c in (json["data"] as JArray) ?? new JArray())
+            list.Add(new CfCategory(
+                c.Value<int?>("id") ?? 0,
+                c.Value<string>("slug") ?? "",
+                c.Value<string>("name") ?? ""));
+        return list;
+    }
+
     public static async Task<List<CfDependency>> GetDependenciesAsync(
         int projectId, int fileId, CancellationToken ct)
     {
@@ -218,8 +238,10 @@ public static class CurseForgeSource
             ClassModpacks => PackCategories,
             ClassShaders => ShaderCategories,
             ClassResourcePacks => ResourcePackCategories,
+            ClassWorlds => null,   // 地图分类是运行时拉取的数字 id,直接透传
             _ => ModCategories,
         };
+        if (map == null) return 0;
         return map.TryGetValue(category!, out var id) ? id : 0;
     }
 

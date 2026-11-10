@@ -198,6 +198,7 @@ public class DownloadPanel : UserControl
         "optifine-install" => "OptiFine",
         "optifine-assemble" => "OptiFine 组装",
         "modpack-install" => "整合包",
+        "map-install" => "地图",
         "mod-update" => "模组更新",
         "user-file" => "高速下载",
         "fileset" => "资源文件",
