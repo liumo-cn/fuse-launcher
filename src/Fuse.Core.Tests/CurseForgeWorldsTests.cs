@@ -16,6 +16,20 @@ public class CurseForgeWorldsTests : IDisposable
             => Task.FromResult(json);
     }
 
+    /// <summary>捕获实际请求的相对路径,用于断言搜索 URL 的形状。</summary>
+    private sealed class CapturingTransport(string json) : ICurseForgeTransport
+    {
+        public string? LastPath;
+        public Task<string> GetAsync(string pathAndQuery, CancellationToken ct)
+        {
+            LastPath = pathAndQuery;
+            return Task.FromResult(json);
+        }
+    }
+
+    private static readonly string EmptySearchJson =
+        """{"data":[],"pagination":{"totalCount":0,"limit":20,"offset":0,"totalSize":0}}""";
+
     [Fact]
     public void World_MapsToClassId17()
     {
@@ -47,5 +61,42 @@ public class CurseForgeWorldsTests : IDisposable
         Assert.Equal("parkour", cats[0].Slug);
         Assert.Equal("Parkour", cats[0].Name);
         Assert.Equal("Survival", cats[1].Name);
+    }
+
+    /// <summary>地图搜索的行为回归:classId=17、不带 gameVersion(大量地图不标注版本,带了滤空)、分类数字 id 直传、不带加载器。</summary>
+    [Fact]
+    public async Task WorldSearch_OmitsGameVersionAndPassesNumericCategory()
+    {
+        var transport = new CapturingTransport(EmptySearchJson);
+        CurseForgeSource.Configure(transport);
+
+        await CurseForgeSource.SearchAsync("parkour", "", "", "4876", 20, 20,
+            CancellationToken.None, "world");
+
+        Assert.NotNull(transport.LastPath);
+        Assert.Contains("/mods/search", transport.LastPath);
+        Assert.Contains("classId=17", transport.LastPath);
+        Assert.DoesNotContain("gameVersion=", transport.LastPath);
+        Assert.DoesNotContain("modLoaderType=", transport.LastPath);
+        Assert.Contains("categoryId=4876", transport.LastPath);
+        Assert.Contains("searchFilter=parkour", transport.LastPath);
+        Assert.Contains("index=20", transport.LastPath);
+    }
+
+    /// <summary>普通模组搜索仍带 gameVersion 与 modLoaderType(地图分支不许影响其它页签)。</summary>
+    [Fact]
+    public async Task ModSearch_KeepsGameVersionAndLoader()
+    {
+        var transport = new CapturingTransport(EmptySearchJson);
+        CurseForgeSource.Configure(transport);
+
+        await CurseForgeSource.SearchAsync("sodium", "1.21.1", "fabric", "全部", 0, 20,
+            CancellationToken.None, "mod");
+
+        Assert.NotNull(transport.LastPath);
+        Assert.Contains("classId=6", transport.LastPath);
+        Assert.Contains("gameVersion=1.21.1", transport.LastPath);
+        Assert.Contains("modLoaderType=4", transport.LastPath);
+        Assert.DoesNotContain("categoryId=", transport.LastPath);
     }
 }
