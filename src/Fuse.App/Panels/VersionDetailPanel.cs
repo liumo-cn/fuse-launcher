@@ -3072,13 +3072,13 @@ public class VersionDetailPanel : UserControl
     private void DeleteBackup(InstanceBackup.BackupInfo info)
     {
         var confirm = new ConfirmWindow("删除备份",
-            "确定删除这个备份吗？\n\n" + info.Created.ToString("yyyy-MM-dd HH:mm") +
-            "\n" + FormatSize(info.Size),
+            "确定删除这个备份吗？\n\n" + info.Path + "\n\n" + info.Created.ToString("yyyy-MM-dd HH:mm") +
+            "\n" + FormatSize(info.Size) + "\n\n删除后移入回收站,可在回收站还原。",
             "删除", danger: true);
         if (Show(confirm) != true) return;
         try
         {
-            File.Delete(info.Path);
+            Fuse.Core.Versioning.SafeDirectory.DeleteFileToRecycle(info.Path, System.IO.Path.GetDirectoryName(info.Path)!);
             Toast("备份已删除", _backupCard);
         }
         catch (Exception ex)
@@ -3159,7 +3159,7 @@ public class VersionDetailPanel : UserControl
         var deleteTargets = Fuse.Core.Versioning.VersionDeletion.PlanDirectories(_gameRoot, _versionId, InstDir());
         host.Children.Add(new TextBlock
         {
-            Text = "将删除以下目录,无法恢复:\n" +
+            Text = "将删除以下目录(移入回收站,可在回收站还原):\n" +
                    string.Join("\n", deleteTargets.Select(t => "· " + t)) +
                    "\n\n版本文件、模组、配置以及存档都在其中。",
             FontSize = 11.5, Foreground = T2,
@@ -3226,7 +3226,7 @@ public class VersionDetailPanel : UserControl
             {
                 // 目标目录里可能有指向共享内容的 junction(自动虚拟隔离),reparse 感知删除
                 foreach (var dir in targets)
-                    if (Directory.Exists(dir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(dir, _gameRoot);
+                    if (Directory.Exists(dir)) Fuse.Core.Versioning.SafeDirectory.DeleteTreeToRecycle(dir, _gameRoot);
             }
             catch (Exception ex)
             {
@@ -5403,9 +5403,16 @@ public class VersionDetailPanel : UserControl
                     "删除" + (isMods ? "模组" : isShaders ? "光影" : "材质包") + " " + entry.Name);
                 del.Click += (_, _) =>
                 {
+                    // 用户要求的二次确认(2026-11-13):本地页文件删除此前无确认
+                    var kind = isMods ? "模组" : isShaders ? "光影" : "材质包";
+                    var confirm = new ConfirmWindow("删除" + kind + "文件",
+                        "确定删除「" + entry.Name + "」吗?\n\n" + entry.FullName +
+                        "\n\n删除后移入回收站,可在回收站还原。", "删除", danger: true);
+                    if (Show(confirm) != true) return;
                     try
                     {
-                        File.Delete(entry.FullName);
+                        Fuse.Core.Versioning.SafeDirectory.DeleteFileToRecycle(entry.FullName, dir);
+                        Toast(kind + "已删除(可在回收站还原)");
                     }
                     catch (Exception ex)
                     {
@@ -5694,11 +5701,11 @@ public class VersionDetailPanel : UserControl
             del.Click += (_, _) =>
             {
                 var confirm = new ConfirmWindow("删除存档",
-                    "确定删除存档「" + captured.Name + "」吗？此操作不可恢复。", "删除", danger: true);
+                    "确定删除存档「" + captured.Name + "」吗？将移入回收站,可在回收站还原。", "删除", danger: true);
                 if (Show(confirm) != true) return;
                 try
                 {
-                    Fuse.Core.Versioning.SafeDirectory.DeleteTree(captured.FullName, dir);
+                    Fuse.Core.Versioning.SafeDirectory.DeleteTreeToRecycle(captured.FullName, dir);
                     Toast("存档已删除");
                 }
                 catch (Exception ex)
@@ -5860,11 +5867,13 @@ public class VersionDetailPanel : UserControl
 
     private void DeleteWorldBackup(Fuse.Core.Installer.WorldBackup.BackupInfo info)
     {
-        var confirm = new ConfirmWindow("删除存档备份", "确定删除这个存档备份吗？", "删除", danger: true);
+        var confirm = new ConfirmWindow("删除存档备份",
+            "确定删除这个存档备份吗？\n\n" + info.Path + "\n\n删除后移入回收站,可在回收站还原。",
+            "删除", danger: true);
         if (Show(confirm) != true) return;
         try
         {
-            File.Delete(info.Path);
+            Fuse.Core.Versioning.SafeDirectory.DeleteFileToRecycle(info.Path, System.IO.Path.GetDirectoryName(info.Path)!);
             Toast("备份已删除", _backupCard);
         }
         catch (Exception ex)
@@ -5954,7 +5963,7 @@ public class VersionDetailPanel : UserControl
             System.Windows.Automation.AutomationProperties.SetName(del, "删除截图 " + shot.Name);
             del.Click += (_, _) =>
             {
-                try { File.Delete(captured.FullName); Toast("截图已删除"); }
+                try { Fuse.Core.Versioning.SafeDirectory.DeleteFileToRecycle(captured.FullName, System.IO.Path.GetDirectoryName(captured.FullName)!); Toast("截图已删除(可在回收站还原)"); }
                 catch (Exception ex) { Toast("删除失败:" + ex.Message, _backupCard); }
                 RenderTab();
             };

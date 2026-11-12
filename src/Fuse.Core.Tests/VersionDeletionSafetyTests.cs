@@ -226,4 +226,55 @@ public class VersionDeletionSafetyTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v2")));
         Assert.True(File.Exists(Path.Combine(_root, "saves", "world", "level.dat")));
     }
+
+    // ---------- 回收站分流(用户发起的删除) ----------
+
+    [Fact]
+    public void Recycle_UserDeletion_GoesToSink_KeepsDisk()
+    {
+        var sent = new List<string>();
+        SafeDirectory.RecycleSink = p => sent.Add(p);
+        List<string> targets;
+        try
+        {
+            targets = VersionDeletion.PlanDirectories(_root, "v1", _root).Select(Path.GetFullPath).ToList();
+            foreach (var t in targets) SafeDirectory.DeleteTreeToRecycle(t, _root);
+
+            Assert.Equal(targets, sent);
+            // 磁盘上还在:由"回收站"负责处置(mock 不真删)
+            Assert.True(Directory.Exists(Path.Combine(_root, "versions", "v1")));
+        }
+        finally { SafeDirectory.RecycleSink = null; }
+        // 清理(sink 已移除 → 永久删除)
+        foreach (var t in targets) SafeDirectory.DeleteTree(t, _root);
+        Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v1")));
+    }
+
+    [Fact]
+    public void Recycle_WithoutSink_FallsBackToPermanent()
+    {
+        Assert.Null(SafeDirectory.RecycleSink);
+        var targets = VersionDeletion.PlanDirectories(_root, "v2", _root);
+        foreach (var t in targets) SafeDirectory.DeleteTreeToRecycle(t, _root);
+        Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v2")));
+    }
+
+    [Fact]
+    public void RecycleFile_SameGuards()
+    {
+        var sent = new List<string>();
+        SafeDirectory.RecycleSink = p => sent.Add(p);
+        var file = Path.Combine(_root, "options.txt");
+        try
+        {
+            Assert.Throws<IOException>(() =>
+                SafeDirectory.DeleteFileToRecycle(@"D:\outside-sandbox.txt", _root));
+            SafeDirectory.DeleteFileToRecycle(file, _root);
+            Assert.Contains(Path.GetFullPath(file), sent);
+            Assert.True(File.Exists(file));   // mock 未真删
+        }
+        finally { SafeDirectory.RecycleSink = null; }
+        SafeDirectory.DeleteFileToRecycle(file, _root);
+        Assert.False(File.Exists(file));
+    }
 }

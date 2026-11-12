@@ -115,7 +115,7 @@ internal sealed class ModBackupsWindow : Window
     {
         var confirm = new ConfirmWindow("删除备份",
             "确定删除这个修复备份？" + Environment.NewLine + Environment.NewLine +
-            backupDir + Environment.NewLine + Environment.NewLine + "删除后无法恢复。",
+            backupDir + Environment.NewLine + Environment.NewLine + "删除后移入回收站,可在回收站还原。",
             "删除", danger: true)
         {
             Owner = this,
@@ -123,7 +123,7 @@ internal sealed class ModBackupsWindow : Window
         if (confirm.ShowDialog() != true) return;
         try
         {
-            Fuse.Core.Versioning.SafeDirectory.DeleteTree(backupDir, Path.GetDirectoryName(backupDir)!);
+            Fuse.Core.Versioning.SafeDirectory.DeleteTreeToRecycle(backupDir, Path.GetDirectoryName(backupDir)!);
             var row = host.Children.OfType<Border>()
                 .FirstOrDefault(b => (b.Tag as string) == backupDir);
             if (row != null) host.Children.Remove(row);

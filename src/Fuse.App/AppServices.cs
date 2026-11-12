@@ -241,7 +241,7 @@ public static class AppServices
         try
         {
             // 目录里可能有指向共享内容的 junction(自动虚拟隔离),必须 reparse 感知删除
-            Fuse.Core.Versioning.SafeDirectory.DeleteTree(full, parent);
+            Fuse.Core.Versioning.SafeDirectory.DeleteTreeToRecycle(full, parent);
         }
         catch (Exception ex)
         {
@@ -563,6 +563,41 @@ public static class AppServices
         }
     }
 
+    /// <summary>把目标送入系统回收站(可还原);回收站不可用时退回永久删除并写日志。</summary>
+    private static void RecycleToBin(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+                Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(
+                    path,
+                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            else if (File.Exists(path))
+                Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                    path,
+                    Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                    Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+            else return;
+            WidgetWindow.Boot("[recycle] " + path);
+        }
+        catch (Exception ex)
+        {
+            // 超长路径/回收站被禁用等:退回永久删除(reparse 感知),留痕
+            WidgetWindow.Boot("[recycle] send failed, permanent delete: " + path + " · " + ex.Message);
+            try
+            {
+                if (Directory.Exists(path)) Fuse.Core.Versioning.SafeDirectory.DeleteTreeUnrootedPublic(path);
+                else if (File.Exists(path)) File.Delete(path);
+            }
+            catch (Exception ex2)
+            {
+                WidgetWindow.Boot("[recycle] permanent delete also failed: " + ex2.Message);
+                throw;
+            }
+        }
+    }
+
     private static void StageGameDirectory(string root)
     {
         var versionsRoot = Path.Combine(root, "versions");
@@ -855,6 +890,9 @@ public static class AppServices
         }
         PruneMissingGameDirectories();
         StageAllGameDirectories();
+        // 用户发起的删除送回收站(可还原);Core 是 netstandard2.0 没有 VB FileIO,由 App 注入实现。
+        // 注入失败(超长路径/回收站禁用)在 RecycleToBin 内退回永久删除并写日志。
+        Fuse.Core.Versioning.SafeDirectory.RecycleSink = RecycleToBin;
         // 2026-11-04: 原版批量下载改走官方源(不限流),并发从 8 提到 16;
         // 旧配置里这个字段没暴露在 UI,统一升级,避免重装后仍是"8 路 + 429 退避"的慢速组合
         if (Config.SmallFileParallelism <= 8)

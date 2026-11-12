@@ -15,8 +15,40 @@ namespace Fuse.Core.Versioning;
 /// </summary>
 public static class SafeDirectory
 {
+    /// <summary>
+    /// App 层注入的回收站实现(netstandard2.0 没有 VB FileIO):收到目标路径即送回收站。
+    /// null = 未注入(core-only/测试环境)→ 回收站重载回退为永久删除。
+    /// </summary>
+    public static Action<string>? RecycleSink { get; set; }
+
     /// <summary>带白名单根的目录树删除。目标必须严格位于 allowedRoot 内部,否则抛 IOException。</summary>
     public static void DeleteTree(string path, string allowedRoot)
+    {
+        var target = Validate(path, allowedRoot);
+        DeleteTreeUnrooted(target);
+    }
+
+    /// <summary>
+    /// 用户发起的目录删除:同样的白名单根/保护根校验,但目标送回收站(可在回收站还原)。
+    /// 未注入 RecycleSink 时回退为永久删除。
+    /// </summary>
+    public static void DeleteTreeToRecycle(string path, string allowedRoot)
+    {
+        var target = Validate(path, allowedRoot);
+        if (RecycleSink == null) { DeleteTreeUnrooted(target); return; }
+        RecycleSink(target);
+    }
+
+    /// <summary>用户发起的单文件删除:同上,送回收站;未注入时永久删除。</summary>
+    public static void DeleteFileToRecycle(string path, string allowedRoot)
+    {
+        var target = Validate(path, allowedRoot);
+        if (RecycleSink == null) { TryClearReadOnly(new FileInfo(target)); File.Delete(target); return; }
+        RecycleSink(target);
+    }
+
+    /// <summary>白名单根/保护根校验,返回规范化目标;不通过抛 IOException。</summary>
+    private static string Validate(string path, string allowedRoot)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new IOException("删除目标为空,拒绝执行");
         if (string.IsNullOrWhiteSpace(allowedRoot)) throw new IOException("未指定允许删除的根目录,拒绝执行");
@@ -26,7 +58,7 @@ public static class SafeDirectory
         // 必须严格位于允许根内部:拦下 allowedRoot 本身、其祖先、.. 逃逸与盘符根
         if (!target.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             throw new IOException($"删除目标不在允许的根目录「{root}」内:{target}");
-        DeleteTreeUnrooted(target);
+        return target;
     }
 
     private static void DeleteTreeUnrooted(string path)
@@ -41,6 +73,12 @@ public static class SafeDirectory
         Clean(dir);
         dir.Delete(false);
     }
+
+    /// <summary>
+    /// 无根校验的 reparse 感知删除。仅供"已通过白名单校验"的回收站失败回退使用;
+    /// 常规删除请用 DeleteTree / DeleteTreeToRecycle。
+    /// </summary>
+    public static void DeleteTreeUnrootedPublic(string path) => DeleteTreeUnrooted(path);
 
     private static void Clean(DirectoryInfo dir)
     {
