@@ -84,6 +84,21 @@ public class PanelWindow : Window
             var finalTop = orbCenterY - window.ActualHeight / 2 + stack;
             window.Left = Math.Max(area.Left + 8, Math.Min(area.Right - window.ActualWidth - 8, finalLeft));
             window.Top = Math.Max(area.Top + 8, Math.Min(area.Bottom - window.ActualHeight - 8, finalTop));
+            // SizeToContent.Height 的面板会随 RenderTab 改变高度(切页签/展开删除确认区),
+            // 高度一变,底部的按钮(如「删除此版本」)就会落到工作区外(2026-11-13 用户实测):
+            // 每次尺寸变化都把当前位置重新钳回工作区,内容超高时靠面板内 ScrollViewer 滚动
+            void RepositionIntoWorkArea()
+            {
+                var a = SystemParameters.WorkArea;
+                window.Left = Math.Max(a.Left + 8, Math.Min(a.Right - window.ActualWidth - 8, window.Left));
+                window.Top = Math.Max(a.Top + 8, Math.Min(a.Bottom - window.ActualHeight - 8, window.Top));
+            }
+            window.SizeChanged += (_, _) =>
+            {
+                RepositionIntoWorkArea();
+                // 玻璃效果/延迟测量会让最终尺寸晚到,补一拍低优先级再钳一次
+                window.Dispatcher.BeginInvoke(RepositionIntoWorkArea, System.Windows.Threading.DispatcherPriority.Background);
+            };
             // 面板生成在启动大圆前面(覆盖大圆/花瓣),✕ 关闭后组件恢复交互
 
             // 出场动画:从生成点(花瓣点击处)由小到大,0.3s。
