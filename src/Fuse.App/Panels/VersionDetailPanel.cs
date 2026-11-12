@@ -2828,7 +2828,7 @@ public class VersionDetailPanel : UserControl
         {
             host.Children.Add(new TextBlock
             {
-                Text = "外部游戏目录不支持备份/复制（实例目录就是整个 .minecraft）。",
+                Text = "外部游戏目录暂不支持实例备份/复制。",
                 FontSize = 11,
                 Foreground = T2,
                 Opacity = 0.66,
