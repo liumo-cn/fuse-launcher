@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -40,15 +41,61 @@ public class VersionsPanel : UserControl
         Refresh();
     }
 
+    private int _scanGeneration;   // 每次刷新自增:大目录扫描挪到后台后,过期回调用它作废
+
     public void Refresh()
     {
+        // 版本扫描含递归算体积(Roaming .minecraft 级别的目录要几秒),必须离开 UI 线程,
+        // 否则切换目录/打开面板/删除版本后刷新都会把界面冻住(2026-11-12 用户实测卡顿)
+        _scanGeneration++;
+        var gen = _scanGeneration;
         _list.Children.Clear();
         _list.Children.Add(_folders);
         _folders.Reload();
-        var versions = InstalledVersionScanner.Scan(
-            AppServices.VersionsRoot, AppServices.InstancesRoot, AppServices.LibrariesRoot,
-            externalLayout: !AppServices.IsManagedLayout(AppServices.ActiveGameDirectory));
+        _list.Children.Add(new TextBlock
+        {
+            Text = "正在扫描版本…",
+            FontSize = 12,
+            Foreground = (Brush)Application.Current.Resources["TextSecondaryBrush"],
+            Margin = new Thickness(4, 10, 4, 10),
+        });
+        var versionsRoot = AppServices.VersionsRoot;
+        var instancesRoot = AppServices.InstancesRoot;
+        var librariesRoot = AppServices.LibrariesRoot;
+        var externalLayout = !AppServices.IsManagedLayout(AppServices.ActiveGameDirectory);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var versions = InstalledVersionScanner.Scan(
+                    versionsRoot, instancesRoot, librariesRoot, externalLayout);
+                await Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (gen != _scanGeneration) return;   // 已有更新的一次扫描接管
+                    RenderVersions(versions);
+                }));
+            }
+            catch (Exception ex)
+            {
+                await Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (gen != _scanGeneration) return;
+                    _list.Children.Add(new TextBlock
+                    {
+                        Text = "扫描版本失败:" + ex.Message,
+                        FontSize = 12,
+                        Foreground = (Brush)Application.Current.Resources["TextSecondaryBrush"],
+                        Margin = new Thickness(4, 10, 4, 10),
+                    });
+                }));
+            }
+        });
+    }
 
+    private void RenderVersions(IReadOnlyList<InstalledVersionInfo> versions)
+    {
+        _list.Children.Clear();
+        _list.Children.Add(_folders);
         if (versions.Count == 0)
         {
             _list.Children.Add(new TextBlock

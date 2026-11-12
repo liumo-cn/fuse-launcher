@@ -159,6 +159,7 @@ public class VersionDetailPanel : UserControl
 
     // 修改页删除确认
     private bool _deleteConfirmOpen;
+    private bool _deleteBusy;   // 删除在后台跑,期间禁止重复触发
 
     // 导出
     private int _exportChoice = 1;
@@ -3190,7 +3191,7 @@ public class VersionDetailPanel : UserControl
             Height = 42,
         };
         System.Windows.Automation.AutomationProperties.SetName(confirmBtn, "确定删除");
-        confirmBtn.Click += (_, _) => DeleteVersion();
+        confirmBtn.Click += (_, _) => DeleteVersion(confirmBtn);
         Grid.SetColumn(confirmBtn, 2);
         buttons.Children.Add(confirmBtn);
 
@@ -3199,38 +3200,57 @@ public class VersionDetailPanel : UserControl
         _content.Children.Add(confirm);
     }
 
-    private void DeleteVersion()
+    private void DeleteVersion(Button confirmBtn)
     {
-        try
+        if (_deleteBusy) return;
+        // 目录规划收口在 Core:未开隔离的共享根,InstDir() 就是游戏根本身,
+        // 绝不能整目录删(2026-11-12 mc联机 事故根因,liumo-guard/1.0)
+        var targets = Fuse.Core.Versioning.VersionDeletion.PlanDirectories(_gameRoot, _versionId, InstDir());
+        if (string.Equals(AppServices.Config.LastLaunchedVersion, _versionId, StringComparison.OrdinalIgnoreCase))
         {
-            var versionsDir = Path.Combine(VRoot(), _versionId);
-            var instanceDir = InstDir();
-            if (Directory.Exists(versionsDir)) Directory.Delete(versionsDir, true);
-            if (Directory.Exists(instanceDir)) Directory.Delete(instanceDir, true);
-            AppServices.VersionProfiles.Remove(_versionId);
-            if (string.Equals(AppServices.Config.LastLaunchedVersion, _versionId, StringComparison.OrdinalIgnoreCase))
-            {
-                AppServices.Config.LastLaunchedVersion = null;
-                AppServices.SaveConfig();
-            }
-        }
-        catch (Exception ex)
-        {
-            // 面板还开着,用行内提示;失败时不关任何窗口
-            Toast("删除失败：" + ex.Message);
-            _deleteConfirmOpen = false;
-            RenderTab();
-            return;
+            AppServices.Config.LastLaunchedVersion = null;
+            AppServices.SaveConfig();
         }
 
-        // 只关掉详情页;版本列表若开着就原地刷新,让用户退回到总版本页面
-        if (PanelWindow.OpenPanels.TryGetValue("version-detail", out var panel))
-            panel.Close();
-        if (PanelWindow.OpenPanels.TryGetValue("versions", out var vp) &&
-            vp.PanelContent is VersionsPanel list)
+        _deleteBusy = true;
+        confirmBtn.IsEnabled = false;
+        confirmBtn.Content = "删除中…";
+        // 大目录整棵树删除可能要几十秒,挪到后台跑,界面不再冻住
+        _ = Task.Run(async () =>
         {
-            list.Refresh();
-        }
+            Exception? error = null;
+            try
+            {
+                foreach (var dir in targets)
+                    if (Directory.Exists(dir)) Directory.Delete(dir, true);
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+            AppServices.VersionProfiles.Remove(_versionId);
+            await Dispatcher.InvokeAsync(new Action(() =>
+            {
+                _deleteBusy = false;
+                if (error != null)
+                {
+                    // 面板还开着,用行内提示;失败时不关任何窗口
+                    Toast("删除失败：" + error.Message);
+                    _deleteConfirmOpen = false;
+                    RenderTab();
+                    return;
+                }
+
+                // 只关掉详情页;版本列表若开着就原地刷新,让用户退回到总版本页面
+                if (PanelWindow.OpenPanels.TryGetValue("version-detail", out var panel))
+                    panel.Close();
+                if (PanelWindow.OpenPanels.TryGetValue("versions", out var vp) &&
+                    vp.PanelContent is VersionsPanel list)
+                {
+                    list.Refresh();
+                }
+            }));
+        });
     }
 
     private string JavaSummary()

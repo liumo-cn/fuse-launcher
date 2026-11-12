@@ -463,7 +463,13 @@ public static class AppServices
         {
             error = ex.Message;
             try { if (Directory.Exists(versionDir)) Directory.Delete(versionDir, true); } catch (Exception) { }
-            try { if (Directory.Exists(instanceDir)) Directory.Delete(instanceDir, true); } catch (Exception) { }
+            try
+            {
+                if (Directory.Exists(instanceDir) &&
+                    !Fuse.Core.Versioning.VersionDeletion.IsGameRootPath(instanceDir, root))
+                    Directory.Delete(instanceDir, true);
+            }
+            catch (Exception) { }
             return null;
         }
     }
