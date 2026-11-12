@@ -3156,9 +3156,12 @@ public class VersionDetailPanel : UserControl
             FontSize = 13, FontWeight = FontWeights.SemiBold,
             Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
         });
+        var deleteTargets = Fuse.Core.Versioning.VersionDeletion.PlanDirectories(_gameRoot, _versionId, InstDir());
         host.Children.Add(new TextBlock
         {
-            Text = "版本文件、模组、配置以及存档都会一并删除,无法恢复。",
+            Text = "将删除以下目录,无法恢复:\n" +
+                   string.Join("\n", deleteTargets.Select(t => "· " + t)) +
+                   "\n\n版本文件、模组、配置以及存档都在其中。",
             FontSize = 11.5, Foreground = T2,
             Margin = new Thickness(0, 4, 0, 12), TextWrapping = TextWrapping.Wrap,
         });
@@ -3223,7 +3226,7 @@ public class VersionDetailPanel : UserControl
             {
                 // 目标目录里可能有指向共享内容的 junction(自动虚拟隔离),reparse 感知删除
                 foreach (var dir in targets)
-                    if (Directory.Exists(dir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(dir);
+                    if (Directory.Exists(dir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(dir, _gameRoot);
             }
             catch (Exception ex)
             {
@@ -5695,7 +5698,7 @@ public class VersionDetailPanel : UserControl
                 if (Show(confirm) != true) return;
                 try
                 {
-                    Directory.Delete(captured.FullName, true);
+                    Fuse.Core.Versioning.SafeDirectory.DeleteTree(captured.FullName, dir);
                     Toast("存档已删除");
                 }
                 catch (Exception ex)

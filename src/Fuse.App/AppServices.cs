@@ -241,7 +241,7 @@ public static class AppServices
         try
         {
             // 目录里可能有指向共享内容的 junction(自动虚拟隔离),必须 reparse 感知删除
-            Fuse.Core.Versioning.SafeDirectory.DeleteTree(full);
+            Fuse.Core.Versioning.SafeDirectory.DeleteTree(full, parent);
         }
         catch (Exception ex)
         {
@@ -365,8 +365,8 @@ public static class AppServices
         catch (Exception ex)
         {
             // 失败回滚:别留下半个实例/版本
-            try { if (Directory.Exists(versionDir)) Directory.Delete(versionDir, true); } catch (Exception) { }
-            try { if (!instanceDir.Equals(root, StringComparison.OrdinalIgnoreCase) && Directory.Exists(instanceDir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(instanceDir); } catch (Exception) { }
+            try { if (Directory.Exists(versionDir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(versionDir, root); } catch (Exception) { }
+            try { if (!instanceDir.Equals(root, StringComparison.OrdinalIgnoreCase) && Directory.Exists(instanceDir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(instanceDir, root); } catch (Exception) { }
             error = ex.Message;
             return null;
         }
@@ -469,7 +469,7 @@ public static class AppServices
             {
                 if (Directory.Exists(instanceDir) &&
                     !Fuse.Core.Versioning.VersionDeletion.IsGameRootPath(instanceDir, root))
-                    Fuse.Core.Versioning.SafeDirectory.DeleteTree(instanceDir);
+                    Fuse.Core.Versioning.SafeDirectory.DeleteTree(instanceDir, root);
             }
             catch (Exception) { }
             return null;

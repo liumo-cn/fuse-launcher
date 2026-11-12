@@ -24,7 +24,7 @@ public class IsolationStagerTests : IDisposable
 
     public void Dispose()
     {
-        try { SafeDirectory.DeleteTree(_root); } catch (IOException) { }
+        try { SafeDirectory.DeleteTree(_root, Path.Combine(_root, "..")); } catch (IOException) { }
         try { Directory.Delete(_install, true); } catch (IOException) { }
     }
 
@@ -104,7 +104,7 @@ public class IsolationStagerTests : IDisposable
         IsolationStager.EnsureStaged(_root, "v1", _install);
         var versionDir = Path.Combine(_root, "versions", "v1");
 
-        SafeDirectory.DeleteTree(versionDir);
+        SafeDirectory.DeleteTree(versionDir, _root);
 
         Assert.False(Directory.Exists(versionDir));
         // 共享内容完好: junction 只摘链接,不进目标
@@ -120,7 +120,7 @@ public class IsolationStagerTests : IDisposable
         File.WriteAllText(Path.Combine(tree, "f.txt"), "x");
         File.WriteAllText(Path.Combine(_root, "tree", "top.txt"), "x");
 
-        SafeDirectory.DeleteTree(Path.Combine(_root, "tree"));
+        SafeDirectory.DeleteTree(Path.Combine(_root, "tree"), _root);
 
         Assert.False(Directory.Exists(Path.Combine(_root, "tree")));
     }
@@ -134,7 +134,7 @@ public class IsolationStagerTests : IDisposable
         var link = Path.Combine(_root, "link");
         Assert.True(IsolationStager.CreateJunction(link, target));
 
-        SafeDirectory.DeleteTree(link);
+        SafeDirectory.DeleteTree(link, _root);
 
         Assert.False(Directory.Exists(link));
         Assert.True(File.Exists(Path.Combine(target, "f.txt")));

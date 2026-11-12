@@ -123,7 +123,7 @@ internal sealed class ModBackupsWindow : Window
         if (confirm.ShowDialog() != true) return;
         try
         {
-            Directory.Delete(backupDir, true);
+            Fuse.Core.Versioning.SafeDirectory.DeleteTree(backupDir, Path.GetDirectoryName(backupDir)!);
             var row = host.Children.OfType<Border>()
                 .FirstOrDefault(b => (b.Tag as string) == backupDir);
             if (row != null) host.Children.Remove(row);
