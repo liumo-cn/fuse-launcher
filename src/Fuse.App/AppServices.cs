@@ -133,6 +133,7 @@ public static class AppServices
         if (!GameDirectories.Any(x => x.Equals(full, StringComparison.OrdinalIgnoreCase)))
             Config.ExtraGameDirectories.Add(full);
         SetActiveGameDirectory(full);
+        StageGameDirectory(full);   // 导入即自动虚拟隔离,用户无需操作
     }
 
     // ---------- 文件夹列表(折叠列表风格:显示名 / 重命名 / 移出 / 删除 / 新建) ----------
@@ -239,7 +240,8 @@ public static class AppServices
 
         try
         {
-            if (Directory.Exists(full)) Directory.Delete(full, true);
+            // 目录里可能有指向共享内容的 junction(自动虚拟隔离),必须 reparse 感知删除
+            Fuse.Core.Versioning.SafeDirectory.DeleteTree(full);
         }
         catch (Exception ex)
         {
@@ -364,7 +366,7 @@ public static class AppServices
         {
             // 失败回滚:别留下半个实例/版本
             try { if (Directory.Exists(versionDir)) Directory.Delete(versionDir, true); } catch (Exception) { }
-            try { if (!instanceDir.Equals(root, StringComparison.OrdinalIgnoreCase) && Directory.Exists(instanceDir)) Directory.Delete(instanceDir, true); } catch (Exception) { }
+            try { if (!instanceDir.Equals(root, StringComparison.OrdinalIgnoreCase) && Directory.Exists(instanceDir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(instanceDir); } catch (Exception) { }
             error = ex.Message;
             return null;
         }
@@ -467,7 +469,7 @@ public static class AppServices
             {
                 if (Directory.Exists(instanceDir) &&
                     !Fuse.Core.Versioning.VersionDeletion.IsGameRootPath(instanceDir, root))
-                    Directory.Delete(instanceDir, true);
+                    Fuse.Core.Versioning.SafeDirectory.DeleteTree(instanceDir);
             }
             catch (Exception) { }
             return null;
@@ -543,6 +545,46 @@ public static class AppServices
             n.StartsWith(seg + "/config/", StringComparison.OrdinalIgnoreCase) ||
             n.StartsWith(seg + "/.minecraft/", StringComparison.OrdinalIgnoreCase));
         return hasPayload ? seg + "/" : "";
+    }
+
+    /// <summary>
+    /// 启动时对所有已知游戏目录做自动虚拟隔离(幂等;主目录是 instances 布局自动跳过)。
+    /// 用户从此不需要理解/操作"版本隔离"——共享根目录在后台自动获得每版本游戏目录。
+    /// </summary>
+    private static void StageAllGameDirectories()
+    {
+        try
+        {
+            foreach (var root in GameDirectories) StageGameDirectory(root);
+        }
+        catch (Exception ex)
+        {
+            WidgetWindow.Boot("[isolation] stage pass error · " + ex.Message);
+        }
+    }
+
+    private static void StageGameDirectory(string root)
+    {
+        var versionsRoot = Path.Combine(root, "versions");
+        if (!Directory.Exists(versionsRoot)) return;
+        foreach (var dir in Directory.EnumerateDirectories(versionsRoot))
+        {
+            var id = Path.GetFileName(dir);
+            if (!File.Exists(Path.Combine(dir, id + ".json"))) continue;
+            try
+            {
+                var r = Fuse.Core.Versioning.IsolationStager.EnsureStaged(root, id, InstallDirectory);
+                if (r.Changed)
+                    WidgetWindow.Boot("[isolation] staged " + id + " @" + root +
+                        " (junctions=" + r.Junctions.Count + ", created=" + r.Created.Count + ")");
+                if (r.Failed.Count > 0)
+                    WidgetWindow.Boot("[isolation] stage failed " + id + ": " + string.Join(",", r.Failed));
+            }
+            catch (Exception ex)
+            {
+                WidgetWindow.Boot("[isolation] stage error " + id + " @" + root + " · " + ex.Message);
+            }
+        }
     }
 
     /// <summary>启动时清掉配置里已不存在的导入目录(磁盘被删/移动),避免列表出现死行。</summary>
@@ -812,6 +854,7 @@ public static class AppServices
             SaveConfig();
         }
         PruneMissingGameDirectories();
+        StageAllGameDirectories();
         // 2026-11-04: 原版批量下载改走官方源(不限流),并发从 8 提到 16;
         // 旧配置里这个字段没暴露在 UI,统一升级,避免重装后仍是"8 路 + 429 退避"的慢速组合
         if (Config.SmallFileParallelism <= 8)

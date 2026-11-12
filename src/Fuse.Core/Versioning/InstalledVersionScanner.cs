@@ -90,7 +90,8 @@ public static class InstalledVersionScanner
                 ? InstanceLayout.ResolveExternal(rootDir, id)
                 : Path.Combine(instancesRoot, id);
             if (Directory.Exists(instanceDir) &&
-                !instanceDir.Equals(rootDir, StringComparison.OrdinalIgnoreCase))
+                !instanceDir.Equals(rootDir, StringComparison.OrdinalIgnoreCase) &&
+                !instanceDir.Equals(dir, StringComparison.OrdinalIgnoreCase))
             {
                 size += DirectorySize(instanceDir);
             }
@@ -121,20 +122,33 @@ public static class InstalledVersionScanner
         return result.OrderByDescending(v => v.ReleaseTime).ToList();
     }
 
+    /// <summary>递归算体积;不进入 junction(reparse point)——虚拟隔离把共享目录链进版本目录,跟进会重复计数。</summary>
     private static long DirectorySize(string dir)
     {
-        try
+        try { return SizeDir(new DirectoryInfo(dir)); }
+        catch (IOException) { return 0; }
+        catch (UnauthorizedAccessException) { return 0; }
+    }
+
+    private static long SizeDir(DirectoryInfo dir)
+    {
+        var total = 0L;
+        foreach (var f in dir.EnumerateFiles())
         {
-            return Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)
-                .Sum(f =>
-                {
-                    try { return new FileInfo(f).Length; }
-                    catch (IOException) { return 0L; }
-                });
+            try { total += f.Length; }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
-        catch (IOException)
+        foreach (var sub in dir.EnumerateDirectories())
         {
-            return 0;
+            try
+            {
+                if ((sub.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                total += SizeDir(sub);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
+        return total;
     }
 }

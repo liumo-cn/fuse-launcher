@@ -3221,8 +3221,9 @@ public class VersionDetailPanel : UserControl
             Exception? error = null;
             try
             {
+                // 目标目录里可能有指向共享内容的 junction(自动虚拟隔离),reparse 感知删除
                 foreach (var dir in targets)
-                    if (Directory.Exists(dir)) Directory.Delete(dir, true);
+                    if (Directory.Exists(dir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(dir);
             }
             catch (Exception ex)
             {
@@ -3516,7 +3517,7 @@ public class VersionDetailPanel : UserControl
         var host = new StackPanel();
         host.Children.Add(new TextBlock
         {
-            Text = "这个版本没有开启版本隔离",
+            Text = "这个版本使用共享目录布局",
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
             Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
@@ -3535,14 +3536,14 @@ public class VersionDetailPanel : UserControl
         var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 10, 0, 0) };
         var isolate = new Button
         {
-            Content = "开启版本隔离",
+            Content = "转换为物理隔离（高级）",
             Style = (Style)Application.Current.Resources["ChipButton"],
             Padding = new Thickness(14, 6, 14, 6),
             Margin = new Thickness(0, 0, 8, 0),
         };
         if (Application.Current.Resources["AccentChipBrush"] is Brush accent)
             isolate.Background = accent;
-        System.Windows.Automation.AutomationProperties.SetName(isolate, "开启版本隔离");
+        System.Windows.Automation.AutomationProperties.SetName(isolate, "转换为物理隔离");
         isolate.Click += (_, _) => EnableVersionIsolation();
         row.Children.Add(isolate);
 
@@ -3599,20 +3600,27 @@ public class VersionDetailPanel : UserControl
             Toast("游戏正在运行，先关掉游戏再迁移", _backupCard);
             return;
         }
-        var confirm = new ConfirmWindow("开启版本隔离",
+        var confirm = new ConfirmWindow("转换为物理隔离",
             "将为 " + _versionId + " 创建独立目录 versions\\" + _versionId + "：\n\n" +
             "· 复制存档、配置、资源包、光影\n" +
             "· 把明确只支持本版本的模组从共用 mods 移进去\n" +
             "· 支持其它共用版本的模组留在原处\n\n" +
-            "之后 Fuse 启动这个版本只读独立目录；PCL 等外部启动器仍需要它自己的版本隔离设置。",
-            "开启隔离");
+            "通常不需要这一步：共享目录在启动器启动时已自动完成虚拟隔离。\n" +
+            "物理隔离会把内容真正复制进版本目录，适合想把该版本带走或单独管理的情况。",
+            "开始迁移");
         if (Show(confirm) != true) return;
 
         Toast("正在迁移到独立目录…");
         try
         {
-            var result = await Task.Run(() => Fuse.Core.Installer.SharedInstanceMigrator.Enable(
-                _gameRoot, _versionId, _gameVersion, _loader, OtherSharedVersionIds()));
+            var result = await Task.Run(() =>
+            {
+                // 先摘掉自动虚拟隔离的 junction,再物理迁移(否则 CopyTree 会把共享内容拷回自己)
+                Fuse.Core.Versioning.IsolationStager.Unstage(
+                    System.IO.Path.Combine(_gameRoot, "versions", _versionId));
+                return Fuse.Core.Installer.SharedInstanceMigrator.Enable(
+                    _gameRoot, _versionId, _gameVersion, _loader, OtherSharedVersionIds());
+            });
             Toast("已开启隔离：移入 " + result.CopiedMods.Count + " 个模组，移出共用目录 " +
                   result.MovedMods.Count + " 个；共用 mods 还剩 " + result.SharedModsRemaining + " 个");
             RenderTab();
