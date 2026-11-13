@@ -241,6 +241,23 @@ public class DownloadPanel : UserControl
     private static string TaskSignature(List<DownloadTaskRecord> tasks)
         => string.Join("|", tasks.Select(t => t.TaskId + ":" + (int)t.Status + (t.Pausing ? "p" : "")));
 
+    private TextBlock? _taskCountText;
+    private Button? _clearCompletedButton;
+
+    /// <summary>头部计数与「清除已完成」的可用状态:进面板和每次任务签名变化都要刷新,
+    /// 否则新完成的任务不会让按钮重新变亮(2026-11-13 用户实测)。</summary>
+    private void UpdateTaskHeader(List<DownloadTaskRecord> tasks)
+    {
+        var active = tasks.Count(t => t.Status == DownloadTaskStatus.Downloading ||
+                                      t.Status == DownloadTaskStatus.Queued ||
+                                      t.Status == DownloadTaskStatus.Paused);
+        if (_taskCountText != null)
+            _taskCountText.Text = active + " 个进行中 · 共 " + tasks.Count + " 个任务";
+        if (_clearCompletedButton != null)
+            _clearCompletedButton.IsEnabled =
+                tasks.Any(t => t.Status == DownloadTaskStatus.Completed);
+    }
+
     private void BuildTaskList()
     {
         var tasks = (AppServices.Queue?.GetTasks() ?? Array.Empty<DownloadTaskRecord>()).ToList();
@@ -251,13 +268,14 @@ public class DownloadPanel : UserControl
         var header = new Grid { Margin = new Thickness(0, 0, 0, 10) };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.Children.Add(new TextBlock
+        _taskCountText = new TextBlock
         {
             Text = active + " 个进行中 · 共 " + tasks.Count + " 个任务",
             FontSize = 12,
             Foreground = T2,
             VerticalAlignment = VerticalAlignment.Center,
-        });
+        };
+        header.Children.Add(_taskCountText);
         var clear = new Button
         {
             Content = "清除已完成",
@@ -275,6 +293,7 @@ public class DownloadPanel : UserControl
         };
         Grid.SetColumn(clear, 1);
         header.Children.Add(clear);
+        _clearCompletedButton = clear;
         _root.Children.Add(header);
 
         _taskList = new StackPanel();
@@ -315,6 +334,7 @@ public class DownloadPanel : UserControl
         {
             _taskSignature = signature;
             RebuildTaskRows(tasks);
+            UpdateTaskHeader(tasks);   // 新完成任务出现时,让「清除已完成」重新变亮
             return;
         }
         foreach (var t in tasks)
