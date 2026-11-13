@@ -111,9 +111,8 @@ public static class LocalSkinSetup
     private const string SuspendedDirName = "disabled-mods";
 
     /// <summary>
-    /// 在线账号(正版/皮肤站):本地皮肤一律失效 —— 把 CustomSkinLoader 移出 mods。
-    /// 正版有 Mojang 官方源、外置有 authlib-injector 站点源,都不需要 CSL;
-    /// CSL 留在 mods 里只会用本地文件把官方皮肤盖掉。
+    /// 皮肤站外置账号:停用 CSL —— authlib-injector 已把认证/皮肤请求劫持到皮肤站,
+    /// 皮肤由站点直供;CSL 的默认源(Mojang/LittleSkin)会按玩家名拉到错误身份的皮肤。
     /// </summary>
     public static void SuspendForExternal(string instanceDir)
     {
@@ -147,7 +146,39 @@ public static class LocalSkinSetup
         }
     }
 
-    /// <summary>本地/正版账号:把之前挪走的 CSL 放回 mods(换回本地皮肤前先恢复)。</summary>
+    /// <summary>
+    /// 正版(MSA)账号:保留 CSL(2026-11-14 对齐市面启动器)。
+    /// 旧设计把 CSL 停用,理由是"正版有官方源不需要"——但离线服服务端不转发正版
+    /// 玩家 profile,服务器里其他玩家的皮肤全靠每个客户端的 CSL 按名字解析;
+    /// 正版玩家自己的皮肤若在皮肤站上也一样需要 CSL。HMCL/PCL2 都不会动用户的皮肤模组。
+    /// 只需把之前被停用的 CSL 放回 mods,并清掉 CSL 配置里失效的本地皮肤条目,
+    /// 让 CSL 按默认源(Mojang → LittleSkin → …)按名字加载。
+    /// </summary>
+    public static void RestoreForExternal(string instanceDir)
+    {
+        RestoreForLocal(instanceDir);   // 停用区里只有 CSL jar,放回 mods
+        try
+        {
+            var cfgPath = Path.Combine(instanceDir, "CustomSkinLoader", "CustomSkinLoader.json");
+            if (!File.Exists(cfgPath)) return;
+            var cfg = JObject.Parse(File.ReadAllText(cfgPath));
+            var list = cfg["loadlist"] as JArray;
+            if (list == null) return;
+            var invalid = list.OfType<JObject>()
+                .Where(o => string.Equals(o.Value<string>("type"), "LocalSkin", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (invalid.Count == 0) return;
+            foreach (var o in invalid) list.Remove(o);
+            File.WriteAllText(cfgPath, cfg.ToString());
+            ClearCaches(instanceDir);
+        }
+        catch (Exception)
+        {
+            // 配置清理失败不影响启动:CSL 下次启动会自行重建默认配置
+        }
+    }
+
+    /// <summary>本地/离线账号:把之前挪走的 CSL 放回 mods(换回本地皮肤前先恢复)。</summary>
     public static void RestoreForLocal(string instanceDir)
     {
         try

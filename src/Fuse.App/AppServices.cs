@@ -997,11 +997,17 @@ public static class AppServices
             var instanceDir = InstanceDirectoryIn(root, versionId);
             var versionsRoot = Path.Combine(root, "versions");
 
-            if (account.ActiveType != "offline")
+            if (account.ActiveType == "external")
             {
-                // 外置/正版都不需要 CSL:前者有站点源,后者有 Mojang 官方源;
-                // CSL 留在 mods 里反而会用本地文件把官方皮肤盖掉
+                // 皮肤站外置:authlib-injector 直供皮肤,CSL 的默认源会按名拉错身份,保持停用
                 Core.Installer.LocalSkinSetup.SuspendForExternal(instanceDir);
+                return;
+            }
+            if (account.ActiveType == "msa")
+            {
+                // 正版:保留 CSL(对齐 HMCL/PCL2——离线服里其他玩家的皮肤靠它按名解析),
+                // 只清掉失效的本地皮肤条目,官方皮肤不受影响(2026-11-14 用户确认的对齐方案)
+                Core.Installer.LocalSkinSetup.RestoreForExternal(instanceDir);
                 return;
             }
 
