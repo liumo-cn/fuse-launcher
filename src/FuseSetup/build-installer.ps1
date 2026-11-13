@@ -43,6 +43,7 @@ if (-not (Test-Path $uninstallerExe)) { throw 'uninstaller exe missing' }
 $stage = Join-Path $env:TEMP ('fuse-payload-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $stage | Out-Null
 Copy-Item (Join-Path $root 'dist\app\*') $stage -Recurse -Force
+
 Get-ChildItem $stage -Recurse -Filter *.pdb | Remove-Item -Force
 Copy-Item $uninstallerExe (Join-Path $stage 'Uninstall Fuse Launcher.exe')
 $payloadZip = Join-Path $root 'src\FuseSetup\payload.zip'
@@ -51,7 +52,10 @@ Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $payloadZip -Comp
 Remove-Item -Recurse -Force $stage
 
 # 3) 编译安装器(把版本号传进去,保证"设置→应用"里显示的 DisplayVersion 与启动器一致)
-& dotnet build (Join-Path $root 'src\FuseSetup\FuseSetup.csproj') -c Release -p:Version=$version
+# --no-incremental 强制全量重建:payload.zip 作为 EmbeddedResource 不被 MSBuild
+# 视作编译输入,payload 变了安装器却判定"最新"会用旧 payload 打包(2026-11-14 实测踩坑:
+# 回收站/自动显示等新代码全被旧 payload 顶掉,安装包哈希两次构建一模一样)。liumo-guard/1.0
+& dotnet build (Join-Path $root 'src\FuseSetup\FuseSetup.csproj') -c Release -p:Version=$version --no-incremental
 if ($LASTEXITCODE -ne 0) { throw 'setup build failed' }
 
 # 4) 产物落位 + 改正式文件名(带版本号)
