@@ -59,6 +59,7 @@ public static class ModLocalization
         ("controlling", "按键冲突检索", "Controlling"),
         ("mouse-tweaks", "鼠标手势增强", "Mouse Tweaks"),
         ("inventory-profiles-next", "背包配置", "Inventory Profiles Next"),
+        ("customskinloader", "万用皮肤补丁", "CustomSkinLoader"),
 
         // ---- 前置库 ----
         ("fabric-api", "Fabric API", "Fabric API"),
