@@ -78,7 +78,7 @@ public class DownloadTaskStoreTests : IDisposable
 public class DownloadQueueTests
 {
     /// <summary>假执行器：记录并发峰值，可控制完成时机。</summary>
-    private sealed class FakeExecutor : IDownloadTaskExecutor
+    internal sealed class FakeExecutor : IDownloadTaskExecutor
     {
         private readonly TaskCompletionSource<bool> _gate;
         private readonly bool _fail;
@@ -354,5 +354,77 @@ public class DownloadQueueTests
             await Task.Delay(25);
         }
         Assert.Equal(expected, store.Get(id)!.Status);
+    }
+}
+
+/// <summary>数据安全专项:入队必须触发 TaskCreated(下载面板自动显示依赖此事件)。</summary>
+public class DownloadQueueTaskCreatedTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(
+        Path.GetTempPath(), "mcdl-tc-" + Guid.NewGuid().ToString("N"));
+
+    public DownloadQueueTaskCreatedTests()
+    {
+        Directory.CreateDirectory(_dir);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, true); } catch (IOException) { }
+    }
+
+    private static DownloadTaskRecord MakeTask(string name) => new()
+    {
+        Name = name,
+        Kind = "file",
+        SourceUrl = "http://x/" + name,
+        DestPath = Path.Combine(Path.GetTempPath(), name),
+    };
+
+    [Fact]
+    public void NewTask_FiresTaskCreated()
+    {
+        var queue = new DownloadQueue(
+            new DownloadTaskStore(Path.Combine(_dir, "tasks.json")),
+            new DownloadQueueTests.FakeExecutor(), maxConcurrent: 1);
+        var fired = new List<string>();
+        queue.TaskCreated += r => fired.Add(r.Name);
+
+        queue.Enqueue(MakeTask("a.jar"));
+
+        Assert.Equal(["a.jar"], fired);
+    }
+
+    [Fact]
+    public void DuplicateActiveClick_AlsoFires_WithoutSecondTask()
+    {
+        var store = new DownloadTaskStore(Path.Combine(_dir, "tasks.json"));
+        var queue = new DownloadQueue(store, new DownloadQueueTests.FakeExecutor(), maxConcurrent: 1);
+        var fired = new List<string>();
+        queue.TaskCreated += r => fired.Add(r.Name);
+
+        var first = queue.Enqueue(MakeTask("same.jar"));
+        var second = queue.Enqueue(MakeTask("same.jar"));
+
+        // 去重复用同一任务(不产生第二个任务),但"用户又点了一次下载"仍触发面板自动显示
+        Assert.Equal(first.TaskId, second.TaskId);
+        Assert.Equal(2, fired.Count);
+        Assert.Equal(1, store.GetAll().Count);
+    }
+
+    [Fact]
+    public void ResumePaused_FiresTaskCreated()
+    {
+        var store = new DownloadTaskStore(Path.Combine(_dir, "tasks.json"));
+        var queue = new DownloadQueue(store, new DownloadQueueTests.FakeExecutor(), maxConcurrent: 1);
+        var first = queue.Enqueue(MakeTask("p.jar"));
+        queue.Pause(first.TaskId);
+
+        var fired = new List<string>();
+        queue.TaskCreated += r => fired.Add(r.Name);
+        queue.Enqueue(MakeTask("p.jar"));   // 暂停中的同项再点 = 继续
+
+        Assert.Equal(["p.jar"], fired);
+        Assert.Equal(1, store.GetAll().Count);
     }
 }

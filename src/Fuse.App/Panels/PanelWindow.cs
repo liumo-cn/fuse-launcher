@@ -243,22 +243,9 @@ public class PanelWindow : Window
         border.Child = stack;
 
         // 进度圆环:在卡片**下方**的窗口外侧条带里,左侧与页面左边缘对齐(用户指定)
-        var ring = new Controls.DownloadRing(kind);
-        ring.HorizontalAlignment = HorizontalAlignment.Left;
-        ring.VerticalAlignment = VerticalAlignment.Center;
-        ring.Margin = new Thickness(0, 4, 0, 8);
-        // 高度自动:没有下载任务时不留空白(圆环整体 Collapsed)
-        var ringStrip = new Grid();
-        ringStrip.Children.Add(ring);
-
-        var outer = new Grid();
-        outer.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        outer.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        Grid.SetRow(border, 0);
-        outer.Children.Add(border);
-        Grid.SetRow(ringStrip, 1);
-        outer.Children.Add(ringStrip);
-        return outer;
+        // 下载进度圆环已移除(2026-11-13):下载面板自动弹出后,环属于重复功能。
+        // 左侧 RingGutter 留白保留,避免牵动所有面板的定位数学。
+        return border;
     }
 
     public PanelWindow()

@@ -406,7 +406,6 @@ public sealed class FastDownloadSection : UserControl
                     Algo = HashAlgo.Sha256,
                     Meta = meta.ToString(),
                 });
-                DownloadFocus.Register(task.TaskId, "more");
                 Hint("已加入下载队列：" + fileName + "（可在下载页「任务」查看进度）");
             }
             catch (Exception ex)

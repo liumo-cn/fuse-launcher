@@ -467,7 +467,6 @@ public sealed class FolderListPanel : UserControl
             Kind = "modpack-install",
             Meta = meta,
         });
-        DownloadFocus.Register(task.TaskId, "versions");
         Toast.ShowNearOrb("整合包安装已开始:" + title);
 
         // 装完把整合包名写进版本档案(与下载页同款逻辑)
@@ -632,7 +631,6 @@ public sealed class FolderListPanel : UserControl
                     ["gameDirectory"] = instanceDir,
                 }.ToString(),
             });
-            DownloadFocus.Register(vanillaTask.TaskId, "versions");
 
             _ = Task.Run(async () =>
             {
@@ -671,7 +669,6 @@ public sealed class FolderListPanel : UserControl
                             ["instancesRoot"] = Path.Combine(root, "instances"),
                         }.ToString(),
                     });
-                    DownloadFocus.Register(fabricTask.TaskId, "versions");
                 }
 
                 var modsDir = Path.Combine(instanceDir, "mods");
@@ -691,7 +688,6 @@ public sealed class FolderListPanel : UserControl
                         DestPath = Path.Combine(modsDir, fileName),
                         ExpectedHash = m.Value<string>("sha1") ?? "",
                     });
-                    DownloadFocus.Register(task.TaskId, "versions");
                     AppServices.RecordModInstall(instanceDir, url, fileName, m.Value<string>("sha1") ?? "");
                 }
 

@@ -893,7 +893,6 @@ public class VersionDetailPanel : UserControl
                 Kind = "modpack-install",
                 Meta = meta,
             });
-            DownloadFocus.Register(task.TaskId, "version-detail");
             Toast("已开始安装新版本 " + newVersion);
             _packNewVersion = null;
             RenderTab();
@@ -1397,7 +1396,6 @@ public class VersionDetailPanel : UserControl
                     ["gameDirectory"] = InstDir(),
                 }.ToString(),
             });
-            DownloadFocus.Register(task.TaskId, "version-detail");
             Toast("已加入校验修复任务，可在下载页「任务」查看进度");
         }
         catch (Exception ex)
@@ -2649,7 +2647,6 @@ public class VersionDetailPanel : UserControl
                         DestPath = item.DestPath,
                         ExpectedHash = item.ExpectedHash,
                     });
-                    DownloadFocus.Register(task.TaskId, "version-detail");
                 }
                 Dispatcher.BeginInvoke(new Action(() =>
                     Toast("已开始下载 " + label + "(" + plan.Items.Count + " 个文件,装完重开世界)", _multiplayerCard)));
@@ -3413,7 +3410,6 @@ public class VersionDetailPanel : UserControl
                             Kind = "optifine-assemble",
                             Meta = meta,
                         });
-                        DownloadFocus.Register(task.TaskId, "version-detail");
                         RenderTab();
 
                         // 组装完成后提示"还差 OptiFabric"这一步(半自动方案)
@@ -4307,7 +4303,6 @@ public class VersionDetailPanel : UserControl
                         DestPath = Path.Combine(modsDir, f.FileName),
                         ExpectedHash = string.IsNullOrEmpty(f.Sha1) ? null : f.Sha1,
                     });
-                    DownloadFocus.Register(task.TaskId, "version-detail");
                     queued++;
                     queuedNames += (queuedNames.Length == 0 ? "" : " + ") + f.FileName;
                 }
@@ -4924,7 +4919,6 @@ public class VersionDetailPanel : UserControl
                             DestPath = item.DestPath,
                             ExpectedHash = item.ExpectedHash,
                         });
-                        DownloadFocus.Register(task.TaskId, "version-detail");
                         state.TaskIds.Add(task.TaskId);
                     }
                 }
@@ -4942,7 +4936,6 @@ public class VersionDetailPanel : UserControl
                         DestPath = System.IO.Path.Combine(destDir, file.FileName),
                         ExpectedHash = string.IsNullOrEmpty(file.Sha1) ? null : file.Sha1,
                     });
-                    DownloadFocus.Register(task.TaskId, "version-detail");
                     state.TaskIds.Add(task.TaskId);
                 }
 
@@ -5004,7 +4997,6 @@ public class VersionDetailPanel : UserControl
                 title = hit.Title,
             }),
         });
-        DownloadFocus.Register(task.TaskId, "version-detail");
         state.TaskIds.Add(task.TaskId);
         state.MainTaskIds.Add(task.TaskId);
         state.MainFileName = main.FileName;   // 仅展示用;地图的成功记录在队列侧落盘
@@ -5071,7 +5063,6 @@ public class VersionDetailPanel : UserControl
             DestPath = System.IO.Path.Combine(state.DestDir, file.FileName),
             ExpectedHash = string.IsNullOrWhiteSpace(file.Sha1) ? null : file.Sha1,
         });
-        DownloadFocus.Register(task.TaskId, "version-detail");
         state.TaskIds.Add(task.TaskId);
         if (isMain) state.MainTaskIds.Add(task.TaskId);
     }
@@ -5608,7 +5599,6 @@ public class VersionDetailPanel : UserControl
                     Kind = "mod-update",
                     Meta = meta,
                 });
-                DownloadFocus.Register(task.TaskId, "version-detail");
                 taskIds.Add(task.TaskId);
             }
             catch (Exception ex)

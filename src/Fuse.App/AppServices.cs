@@ -564,6 +564,37 @@ public static class AppServices
     }
 
     /// <summary>把目标送入系统回收站(可还原);回收站不可用时退回永久删除并写日志。</summary>
+    private static DateTime _lastTaskPanelAutoShow = DateTime.MinValue;
+
+    /// <summary>
+    /// 下载面板自动显示:任何页面入队下载任务即触发。
+    /// 面板未开 → 弹出并停在「任务」页签;已开 → 只激活(不重新定位/置顶)。
+    /// 批量入队(自动补全/整合包清单)靠 2 秒节流只弹一次;事件可能在后台线程,统一走 Dispatcher。
+    /// </summary>
+    private static void OnDownloadTaskCreated(Fuse.Core.Download.DownloadTaskRecord record)
+    {
+        var app = System.Windows.Application.Current;
+        if (app == null || Widget == null) return;
+        app.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try
+            {
+                if ((DateTime.UtcNow - _lastTaskPanelAutoShow).TotalSeconds < 2) return;
+                _lastTaskPanelAutoShow = DateTime.UtcNow;
+                var exists = Fuse.App.Panels.PanelWindow.OpenPanels.ContainsKey("download");
+                if (!exists) Panels.DownloadPanel.PendingInitialMode = "tasks";
+                Fuse.App.Panels.PanelWindow.ShowPanel("download", new System.Windows.Point(0, 0), onLeft: false, Widget);
+                if (exists && Fuse.App.Panels.PanelWindow.OpenPanels.TryGetValue("download", out var window) &&
+                    window.PanelContent is Panels.DownloadPanel panel)
+                    panel.SwitchToTasksTab();
+            }
+            catch (Exception ex)
+            {
+                WidgetWindow.Boot("[auto-show] " + ex.Message);
+            }
+        }));
+    }
+
     private static void RecycleToBin(string path)
     {
         try
@@ -923,6 +954,9 @@ public static class AppServices
         // 下载队列的诊断日志并入 boot.log(失败时能看到卡在哪个阶段/完整异常)
         DownloadQueue.Log = msg => WidgetWindow.Boot("[download] " + msg);
         Queue = DownloadQueue.CreateDefault(store, Http, Config.MaxConcurrentTasks, Config.SmallFileParallelism);
+        // 用户点下载 → 自动弹出/激活下载面板并停在「任务」页签(2026-11-13 用户拍板);
+        // 每次重建队列都是新实例,订阅必须跟着重挂
+        Queue.TaskCreated += OnDownloadTaskCreated;
         // 下载任务失败同样弹"坏菜了"(用户要求:任何差错都要提示并可导出日志)
         Queue.TaskChanged += record =>
         {

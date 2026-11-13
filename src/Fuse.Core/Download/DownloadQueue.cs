@@ -171,6 +171,9 @@ public sealed class DownloadQueue
     private Task? _pumpTask;
 
     public event Action<DownloadTaskRecord>? TaskChanged;
+    /// <summary>入队即触发(新建/续传暂停中的任务/复用已激活任务都算——
+    /// 语义是"用户又点了一次下载"),供下载面板自动显示使用。</summary>
+    public event Action<DownloadTaskRecord>? TaskCreated;
 
     /// <summary>诊断日志回调(外壳接到 boot.log);不设置时静默。失败时能看出卡在哪个阶段。</summary>
     public static Action<string>? Log;
@@ -227,6 +230,7 @@ public sealed class DownloadQueue
                   " (" + duplicate.Kind + ")");
             OnChanged(duplicate);
             Pump();
+            TaskCreated?.Invoke(duplicate);
             return duplicate;
         }
 
@@ -237,6 +241,7 @@ public sealed class DownloadQueue
         _store.Upsert(record);
         OnChanged(record);
         Pump();
+        TaskCreated?.Invoke(record);
         return record;
     }
 

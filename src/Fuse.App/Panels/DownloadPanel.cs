@@ -45,6 +45,8 @@ public class DownloadPanel : UserControl
     private string? _expandedCard;            // 当前展开的卡片
     private string? _expandedCollection;      // 当前展开的版本集合
     private string _dlMode = "custom";        // custom=原版+加载器 / modpack=整合包 / tasks=下载任务
+    /// <summary>自动显示时下一次构造的初始页签(仅生效一次)。</summary>
+    public static string? PendingInitialMode;
     private DispatcherTimer? _taskTimer;
     private StackPanel? _taskList;
     private readonly Dictionary<string, (TextBlock Status, ProgressBar Bar, TextBlock Pct, Button Action)> _taskRows = new();
@@ -122,6 +124,12 @@ public class DownloadPanel : UserControl
     public DownloadPanel(string? fixedVanillaId)
     {
         _loaderOnly = !string.IsNullOrEmpty(fixedVanillaId);
+        // 自动显示传入的初始页签(下载面板弹出即停在「任务」);加载器面板保持自身模式
+        if (!string.IsNullOrEmpty(PendingInitialMode) && !_loaderOnly)
+        {
+            _dlMode = PendingInitialMode;
+            PendingInitialMode = null;
+        }
         if (_loaderOnly)
         {
             _selectedVanilla = new MojangVersionEntry(fixedVanillaId!, "release", "", "", "");
@@ -256,6 +264,15 @@ public class DownloadPanel : UserControl
         if (_clearCompletedButton != null)
             _clearCompletedButton.IsEnabled =
                 tasks.Any(t => t.Status == DownloadTaskStatus.Completed);
+    }
+
+    /// <summary>自动显示要求停在「任务」页签(面板已存活时由 AppServices 调用)。</summary>
+    public void SwitchToTasksTab()
+    {
+        if (_loaderOnly) return;
+        if (_dlMode == "tasks") return;
+        _dlMode = "tasks";
+        Rebuild();
     }
 
     private void BuildTaskList()
@@ -937,7 +954,6 @@ public class DownloadPanel : UserControl
                     Kind = "modpack-install",
                     Meta = meta,
                 });
-                DownloadFocus.Register(task.TaskId, _panelKind);
 
                 // 安装完成后把整合包名写进版本档案 → 版本列表显示具体名称。
                 // 注意:这里在后台线程,不能用 DispatcherTimer(没有 Dispatcher 永远不触发)
@@ -1028,7 +1044,6 @@ public class DownloadPanel : UserControl
             Kind = "modpack-install",
             Meta = metaJson,
         });
-        DownloadFocus.Register(task.TaskId, _panelKind);
     }
 
     // CurseForge 数字 ID 的项目页能开,但文件页必须带 slug;查过一次就缓存
@@ -2071,7 +2086,6 @@ public class DownloadPanel : UserControl
                 Kind = "optifine-install",
                 Meta = ofMeta,
             });
-            DownloadFocus.Register(ofTask.TaskId, _panelKind);
             CollapseAfterEnqueue();
             return;
         }
@@ -2095,7 +2109,6 @@ public class DownloadPanel : UserControl
                 ExpectedHash = _selectedVanilla.Sha1,
                 Meta = meta,
             });
-            DownloadFocus.Register(vTask.TaskId, _panelKind);
             CollapseAfterEnqueue();
         }
         else
@@ -2122,7 +2135,6 @@ public class DownloadPanel : UserControl
                     ExpectedHash = _selectedVanilla.Sha1,
                     Meta = vanillaMeta,
                 });
-                DownloadFocus.Register(depTask.TaskId, _panelKind);
             }
 
             var meta = JsonConvert.SerializeObject(new
@@ -2146,7 +2158,6 @@ public class DownloadPanel : UserControl
                 Kind = kind + "-install",
                 Meta = meta,
             });
-            DownloadFocus.Register(lTask.TaskId, _panelKind);
             CollapseAfterEnqueue();
 
             if (_includeApi && kind == "fabric")
