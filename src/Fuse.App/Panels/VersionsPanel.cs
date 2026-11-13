@@ -42,23 +42,29 @@ public class VersionsPanel : UserControl
     }
 
     private int _scanGeneration;   // 每次刷新自增:大目录扫描挪到后台后,过期回调用它作废
+    private string? _renderedSignature;   // 已渲染的数据签名:重扫后没变化就不重绘(消闪烁)
 
     public void Refresh()
     {
         // 版本扫描含递归算体积(Roaming .minecraft 级别的目录要几秒),必须离开 UI 线程,
-        // 否则切换目录/打开面板/删除版本后刷新都会把界面冻住(2026-11-12 用户实测卡顿)
+        // 否则切换目录/打开面板/删除版本后刷新都会把界面冻住(2026-11-13 用户实测卡顿)。
+        // 另:MouseEnter 也会触发刷新,重扫期间保留旧行不动,数据真有变化才重绘——
+        // 否则每次鼠标进出面板都会闪一下(2026-11-14 用户实测"闪烁一两秒")
         _scanGeneration++;
         var gen = _scanGeneration;
-        _list.Children.Clear();
-        _list.Children.Add(_folders);
         _folders.Reload();
-        _list.Children.Add(new TextBlock
+        if (_renderedSignature == null)
         {
-            Text = "正在扫描版本…",
-            FontSize = 12,
-            Foreground = (Brush)Application.Current.Resources["TextSecondaryBrush"],
-            Margin = new Thickness(4, 10, 4, 10),
-        });
+            _list.Children.Clear();
+            _list.Children.Add(_folders);
+            _list.Children.Add(new TextBlock
+            {
+                Text = "正在扫描版本…",
+                FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextSecondaryBrush"],
+                Margin = new Thickness(4, 10, 4, 10),
+            });
+        }
         var versionsRoot = AppServices.VersionsRoot;
         var instancesRoot = AppServices.InstancesRoot;
         var librariesRoot = AppServices.LibrariesRoot;
@@ -72,6 +78,9 @@ public class VersionsPanel : UserControl
                 await Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (gen != _scanGeneration) return;   // 已有更新的一次扫描接管
+                    var signature = VersionSignature(versions);
+                    if (signature == _renderedSignature) return;   // 数据没变:保持现状,不闪
+                    _renderedSignature = signature;
                     RenderVersions(versions);
                 }));
             }
@@ -80,6 +89,11 @@ public class VersionsPanel : UserControl
                 await Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (gen != _scanGeneration) return;
+                    if (_renderedSignature == null)
+                    {
+                        _list.Children.Clear();
+                        _list.Children.Add(_folders);
+                    }
                     _list.Children.Add(new TextBlock
                     {
                         Text = "扫描版本失败:" + ex.Message,
@@ -91,6 +105,12 @@ public class VersionsPanel : UserControl
             }
         });
     }
+
+    /// <summary>版本列表的数据签名:重扫后比对,没变化就不重绘(消鼠标进出引发的闪烁)。</summary>
+    private static string VersionSignature(IReadOnlyList<InstalledVersionInfo> versions)
+        => string.Join("|", versions.Select(v => v.Id + ":" + v.JavaDisplay + ":" + v.ModsDisplay + ":"
+            + v.SizeBytes + ":" + (v.HasClientJar ? "1" : "0") + ":"
+            + (AppServices.VersionProfiles.Get(v.Id).DisplayName ?? "")));
 
     private void RenderVersions(IReadOnlyList<InstalledVersionInfo> versions)
     {
