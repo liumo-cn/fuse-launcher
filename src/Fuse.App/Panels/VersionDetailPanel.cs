@@ -4227,6 +4227,9 @@ public class VersionDetailPanel : UserControl
             {
                 if (!ConfirmSharedContentWrite("光影前置")) return;
                 _shaderPrePending = true;
+                // 解析(查 Iris/Sodium 适配版本)是网络操作,慢网下要一两分钟;
+                // 不立刻给提示的话,用户盯着下载面板会以为按钮没反应(2026-11-13 实测)
+                Toast("正在解析适配的光影前置…完成解析后自动进入下载队列");
                 _ = InstallShaderPreRequisite();
                 RenderTab();
             };
@@ -4258,10 +4261,14 @@ public class VersionDetailPanel : UserControl
     /// </summary>
     private async System.Threading.Tasks.Task InstallShaderPreRequisite()
     {
+        // 解析是逐个 Modrinth API 调用,网络差时没有上限会磨十几分钟毫无动静;
+        // 整体给 90 秒上限,超时给明确提示让用户重试(2026-11-13 实测)
+        using var resolveCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(90));
         try
         {
             var gv = string.IsNullOrEmpty(_gameVersion) ? ResolveMcVersion(_versionId) : _gameVersion;
             var modsDir = ModsDir();
+            WidgetWindow.Boot("[shader-pre] resolving for " + _versionId + " (loader=" + _loader + ", gv=" + gv + ")");
 
             var (slugA, slugB, loaderA, loaderB) = _loader switch
             {
@@ -4284,9 +4291,10 @@ public class VersionDetailPanel : UserControl
             };
 
             var queued = 0;
+            string queuedNames = "";
             foreach (var (a, b, la, lb) in new[] { (slugA, slugB, loaderA, loaderB) }.Concat(fallbacks))
             {
-                var pair = await ResolveCompatiblePairAsync(a, b, la, lb, gv).ConfigureAwait(false);
+                var pair = await ResolveCompatiblePairAsync(a, b, la, lb, gv, resolveCts.Token).ConfigureAwait(false);
                 if (pair == null) continue;
 
                 foreach (var f in new[] { pair.Value.A, pair.Value.B })
@@ -4301,7 +4309,9 @@ public class VersionDetailPanel : UserControl
                     });
                     DownloadFocus.Register(task.TaskId, "version-detail");
                     queued++;
+                    queuedNames += (queuedNames.Length == 0 ? "" : " + ") + f.FileName;
                 }
+                WidgetWindow.Boot("[shader-pre] queued " + queued + " file(s): " + queuedNames);
                 break;   // 第一组成功即止,不混装不同加载器的前置
             }
             if (queued == 0)
@@ -4313,6 +4323,23 @@ public class VersionDetailPanel : UserControl
                     RenderTab();
                 }));
             }
+            else
+            {
+                // 入队成功也要说一声:下载面板出现任务的时间点取决于解析何时完成
+                await Dispatcher.InvokeAsync(new Action(() =>
+                {
+                    Toast("前置已加入下载队列:" + queuedNames);
+                }));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            await Dispatcher.InvokeAsync(new Action(() =>
+            {
+                _shaderPrePending = false;
+                Toast("解析前置超时(网络不佳),请稍后在网络恢复时重试");
+                RenderTab();
+            }));
         }
         catch (Exception ex)
         {
@@ -4333,12 +4360,13 @@ public class VersionDetailPanel : UserControl
     /// </summary>
     private static async System.Threading.Tasks.Task<(Fuse.Core.Sources.ModrinthVersionFile A,
         Fuse.Core.Sources.ModrinthVersionFile B)?> ResolveCompatiblePairAsync(
-        string slugA, string slugB, string loaderA, string loaderB, string gv)
+        string slugA, string slugB, string loaderA, string loaderB, string gv,
+        System.Threading.CancellationToken ct)
     {
         try
         {
             var aCandidates = await Fuse.Core.Sources.ModrinthSource.GetVersionFilesAsync(
-                AppServices.Http, slugA, gv, loaderA, CancellationToken.None).ConfigureAwait(false);
+                AppServices.Http, slugA, gv, loaderA, ct).ConfigureAwait(false);
 
             foreach (var a in aCandidates)
             {
@@ -4349,13 +4377,14 @@ public class VersionDetailPanel : UserControl
                     try
                     {
                         var cand = await Fuse.Core.Sources.ModrinthSource.GetVersionFileByIdAsync(
-                            AppServices.Http, dep.VersionId, CancellationToken.None).ConfigureAwait(false);
+                            AppServices.Http, dep.VersionId, ct).ConfigureAwait(false);
                         if (cand.FileName.IndexOf(slugB, StringComparison.OrdinalIgnoreCase) >= 0)
                         {
                             pinned = cand;
                             break;
                         }
                     }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                     catch (Exception)
                     {
                         // 某个依赖取不到不算整体失败,继续找下一个
@@ -4366,22 +4395,24 @@ public class VersionDetailPanel : UserControl
                 {
                     // A 明确要求这个配套版本:它不支持当前 MC 就换更老的 A
                     if (!await Fuse.Core.Sources.ModrinthSource.IsJarCompatibleWithMcAsync(
-                            AppServices.Http, pinned, gv, CancellationToken.None).ConfigureAwait(false)) continue;
+                            AppServices.Http, pinned, gv, ct).ConfigureAwait(false)) continue;
                     return (a, pinned);
                 }
 
                 try
                 {
                     var bs = await Fuse.Core.Sources.ModrinthSource.GetVersionFilesAsync(
-                        AppServices.Http, slugB, gv, loaderB, CancellationToken.None).ConfigureAwait(false);
+                        AppServices.Http, slugB, gv, loaderB, ct).ConfigureAwait(false);
                     var b = bs.FirstOrDefault(x => SupportsGameVersion(x, gv));
                     if (b != null) return (a, b);
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception)
                 {
                 }
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception)
         {
         }
