@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -40,6 +41,14 @@ public partial class WidgetWindow : Window
     // 离开正方形后的宽限期:这段时间内摸到/点击花瓣就不收回
     private const double CloseGraceMs = 1500;
     private DateTime? _closeDueAt;
+
+    // ---- 无交互暂停 ----
+    // 星光/漂浮是每帧重绘的常驻开销(实测 ~26% 单核),光标不在旁边时没有观感价值。
+    // 离开窗口周围超过 IdlePauseAfterMs 就定格全部装饰动画;悬停计时器继续 20Hz 探测,
+    // 光标一回到附近立即续播(50ms 内,肉眼无感)。
+    private const double IdlePauseAfterMs = 4000;
+    private bool _decorPaused;
+    private DateTime _cursorLastNearAt = DateTime.Now;
 
     // ---- 启动特效(呼吸 → 成功脉冲 / 失败收缩) ----
     // 技术来源:orb-explosion.html 的积分法变频前摇 + 能量环 + 抖动,
@@ -131,7 +140,13 @@ public partial class WidgetWindow : Window
         // 但 WPF 动画仍每帧空转;可见恢复时原样续播(帧率不变,只是不白烧)。
         IsVisibleChanged += (_, e) =>
         {
-            if (e.NewValue is true) ResumeIdleAnimations();
+            if (e.NewValue is true)
+            {
+                // 装饰动画由 Resume 续播;无交互门复位,重新给一段宽限再判定
+                _decorPaused = false;
+                _cursorLastNearAt = DateTime.Now;
+                ResumeIdleAnimations();
+            }
             else PauseIdleAnimations();
         };
 
@@ -156,6 +171,8 @@ public partial class WidgetWindow : Window
     private void UpdateHover()
     {
         if (!IsVisible) return;
+        UpdateDecorGate();
+        if (_decorPaused) return;   // 光标在远处:悬浮逻辑不必走,此时鼠标位置也是过期的
         var p = Mouse.GetPosition(SafeArea);
         if (double.IsNaN(p.X) || double.IsNaN(p.Y)) return;
 
@@ -206,6 +223,51 @@ public partial class WidgetWindow : Window
             if (dx * nx + dy * ny > KeepOpenApothem) return false;
         }
         return true;
+    }
+
+    // ---------- 无交互暂停 ----------
+
+    /// <summary>
+    /// 由 20Hz 悬停计时器驱动:光标回到窗口周围立即续播装饰动画;
+    /// 离开超过 IdlePauseAfterMs 就定格(星光/漂浮每帧重绘是常驻开销,没人看时是白烧)。
+    /// </summary>
+    private void UpdateDecorGate()
+    {
+        var near = IsCursorNearWidget();
+        if (near)
+        {
+            _cursorLastNearAt = DateTime.Now;
+            if (_decorPaused)
+            {
+                _decorPaused = false;
+                ResumeIdleAnimations();
+                Boot("[fx] decor resumed (cursor near)");
+            }
+            return;
+        }
+        if (!_decorPaused && (DateTime.Now - _cursorLastNearAt).TotalMilliseconds >= IdlePauseAfterMs)
+        {
+            _decorPaused = true;
+            PauseIdleAnimations(stopHoverTimer: false);   // 计时器留着当唤醒探测器
+            Boot("[fx] decor paused (cursor away)");
+        }
+    }
+
+    /// <summary>光标是否落在窗口屏幕矩形外扩 48px 内。查询失败按"近"处理:宁可多烧也不冻结交互。</summary>
+    private bool IsCursorNearWidget()
+    {
+        try
+        {
+            if (!NativeMethods.GetCursorPos(out var pt)) return true;
+            const int margin = 48;
+            var tl = SafeArea.PointToScreen(new Point(-margin, -margin));
+            var br = SafeArea.PointToScreen(new Point(SafeArea.ActualWidth + margin, SafeArea.ActualHeight + margin));
+            return pt.X >= tl.X && pt.X <= br.X && pt.Y >= tl.Y && pt.Y <= br.Y;
+        }
+        catch
+        {
+            return true;
+        }
     }
 
     // ---------- 启动特效:呼吸 → 成功脉冲 / 失败收缩 ----------
@@ -723,8 +785,8 @@ public partial class WidgetWindow : Window
         }
     }
 
-    /// <summary>不可见时暂停装饰动画:漂浮定格在当前偏移、星光定格在当前亮度、悬停计时器停走。</summary>
-    private void PauseIdleAnimations()
+    /// <summary>暂停装饰动画:漂浮定格在当前偏移、星光定格在当前亮度。stopHoverTimer=false 时悬停计时器继续走(无交互暂停靠它唤醒)。</summary>
+    private void PauseIdleAnimations(bool stopHoverTimer = true)
     {
         try
         {
@@ -737,7 +799,7 @@ public partial class WidgetWindow : Window
                 el.BeginAnimation(OpacityProperty, null);    // 摘掉动画(会弹回基准值)
                 el.Opacity = held;                           // 立刻定格,肉眼无跳变
             }
-            _hoverTimer.Stop();
+            if (stopHoverTimer) _hoverTimer.Stop();
         }
         catch (Exception)
         {
@@ -1056,5 +1118,17 @@ public partial class WidgetWindow : Window
             // 进程刚退出/句柄失效:忽略,只保留提示
         }
         Toast.ShowNearOrb(string.IsNullOrEmpty(message) ? "该版本已经在运行了" : message);
+    }
+}
+
+internal partial class NativeMethods
+{
+    [DllImport("user32.dll")]
+    internal static extern bool GetCursorPos(out POINT lpPoint);
+
+    internal struct POINT
+    {
+        public int X;
+        public int Y;
     }
 }
