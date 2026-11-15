@@ -59,6 +59,7 @@ public static class ModLocalization
         ("controlling", "按键冲突检索", "Controlling"),
         ("mouse-tweaks", "鼠标手势增强", "Mouse Tweaks"),
         ("inventory-profiles-next", "背包配置", "Inventory Profiles Next"),
+        ("inventory-profiles-next", "R键整理", "Inventory Profiles Next"),
         ("customskinloader", "万用皮肤补丁", "CustomSkinLoader"),
 
         // ---- 前置库 ----
@@ -120,7 +121,7 @@ public static class ModLocalization
         ("supplementaries", "补充物", "Supplementaries"),
         ("alexsmobs", "亚历克斯的生物", "Alex's Mobs"),
         ("alexs-mobs", "亚历克斯的生物", "Alex's Mobs"),
-        ("ice-and-fire", "冰与火", "Ice and Fire"),
+        ("ice-and-fire-dragons", "冰与火", "Ice and Fire"),
         ("twilightforest", "暮色森林", "The Twilight Forest"),
         ("biomesoplenty", "超多生物群系", "Biomes O' Plenty"),
         ("terralith", "地形重构", "Terralith"),
@@ -148,6 +149,16 @@ public static class ModLocalization
         ("open-parties-and-claims", "队伍与领地", "Open Parties and Claims"),
         ("ftb-chunks", "FTB 区块认领", "FTB Chunks"),
         ("ftb-teams", "FTB 队伍", "FTB Teams"),
+        // ---- 常用补充(2026-11-14:slug 均经 Modrinth API 逐一核实) ----
+        ("carry-on", "便携搬运", "Carry On"),
+        ("corpse", "尸体", "Corpse"),
+        ("emotecraft", "表情动作", "Emotecraft"),
+        ("carpet", "地毯", "Carpet"),
+        ("chipped", "雕琢方块", "Chipped"),
+        ("lootr", "Lootr 独立战利品", "Lootr"),
+        ("fast-leaf-decay", "树叶快速腐烂", "Fast Leaf Decay"),
+        ("shulkerboxtooltip", "潜影盒预览", "Shulker Box Tooltip"),
+        ("travelersbackpack", "旅行背包", "Traveler's Backpack"),
     };
 
     private static readonly Dictionary<string, string> ZhBySlug = new(StringComparer.OrdinalIgnoreCase);
