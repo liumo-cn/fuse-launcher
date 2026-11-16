@@ -305,13 +305,26 @@ public partial class MainWindow : Window
                 if (stream == null) throw new FileNotFoundException("安装包内缺少 payload.zip");
                 using var zip = new ZipArchive(stream, ZipArchiveMode.Read);
                 var entries = zip.Entries.Where(e => !string.IsNullOrEmpty(e.Name)).ToList();
+                var skipped = new List<string>();
                 for (var i = 0; i < entries.Count; i++)
                 {
                     var target = Path.Combine(installDir, entries[i].FullName);
                     Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(target))!);
-                    entries[i].ExtractToFile(target, overwrite: true);
+                    try
+                    {
+                        entries[i].ExtractToFile(target, overwrite: true);
+                    }
+                    catch (IOException ex)
+                    {
+                        // 被占用的文件(PresentMon 探针等遗留进程锁住)跳过而不是中止整个安装:
+                        // 中途抛出会让前面已写入的文件停在一半(2026-11-14 用户实测 PresentMon 锁 tools 文件)
+                        Log("skip locked: " + target + " · " + ex.Message);
+                        skipped.Add(entries[i].FullName);
+                    }
                     Report(5 + 80 * (i + 1) / entries.Count, "写入 " + entries[i].Name);
                 }
+                if (skipped.Count > 0)
+                    Log("install done with " + skipped.Count + " locked-file skip(s): " + string.Join(", ", skipped));
             }
 
             Report(88, "预置配置…");

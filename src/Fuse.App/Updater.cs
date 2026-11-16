@@ -327,6 +327,7 @@ internal static class Updater
         var script = string.Join("; ",
             "Start-Sleep -Milliseconds 900",
             "$p = Get-Process -Id $env:FUSE_PID -ErrorAction SilentlyContinue; if ($p) { $p | Stop-Process -Force }",
+            "$pm = Get-Process -Name 'PresentMon-x64' -ErrorAction SilentlyContinue; if ($pm) { $pm | Stop-Process -Force }",
             "Start-Sleep -Milliseconds 300",
             "$arg = '/SILENT /INSTALL=\"' + $env:FUSE_APPDIR + '\" /GAMES=\"' + $env:FUSE_GAMES + '\" /RUN'",
             "[System.Diagnostics.Process]::Start($env:FUSE_SETUP, $arg)");
