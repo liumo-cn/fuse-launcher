@@ -55,4 +55,30 @@ public class ModLocalizationTests
         Assert.Equal("Sodium", ModLocalization.ToEnglishQuery("钠"));
         Assert.Equal("Sodium Extra", ModLocalization.ToEnglishQuery("附加选项"));
     }
+
+    [Fact]
+    public void NewEntries_MapByChineseName()
+    {
+        // 2026-11-15 新增批次的中文对照名(数据安全专项后补)
+        Assert.Equal("Inventory Profiles Next", ModLocalization.ToEnglishQuery("R键整理"));
+        Assert.Equal("Carry On", ModLocalization.ToEnglishQuery("便携搬运"));
+        Assert.Equal("Corpse", ModLocalization.ToEnglishQuery("尸体"));
+        Assert.Equal("Emotecraft", ModLocalization.ToEnglishQuery("表情动作"));
+        Assert.Equal("Carpet", ModLocalization.ToEnglishQuery("地毯"));
+        Assert.Equal("Chipped", ModLocalization.ToEnglishQuery("雕琢方块"));
+        Assert.Equal("Lootr", ModLocalization.ToEnglishQuery("Lootr 独立战利品"));
+        Assert.Equal("Fast Leaf Decay", ModLocalization.ToEnglishQuery("树叶快速腐烂"));
+        Assert.Equal("Shulker Box Tooltip", ModLocalization.ToEnglishQuery("潜影盒预览"));
+        Assert.Equal("Traveler's Backpack", ModLocalization.ToEnglishQuery("旅行背包"));
+    }
+
+    [Fact]
+    public void ZhMatching_IsCaseInsensitive_ForNamesWithLetters()
+    {
+        // 中文名带英文字母(如「R键整理」)时,大小写变体必须都能命中
+        Assert.Equal("Inventory Profiles Next", ModLocalization.ToEnglishQuery("r键整理"));
+        Assert.Equal("Inventory Profiles Next", ModLocalization.ToEnglishQuery("R键整理"));
+        Assert.Equal("Inventory Profiles Next", ModLocalization.ToEnglishQuery("R键整理 1.2"));
+        Assert.Equal("KubeJS 脚本", ModLocalization.ChineseName("kubejs"));
+    }
 }

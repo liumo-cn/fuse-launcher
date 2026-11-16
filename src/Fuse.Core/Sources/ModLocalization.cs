@@ -198,19 +198,19 @@ public static class ModLocalization
         var q = chineseQuery!.Trim();
         if (q.Length == 0) return null;
 
-        // 1. 精确等于中文名
+        // 1. 精确等于中文名(大小写不敏感:中文名常带英文字母,「r键整理」≠「R键整理」会搜不到)
         foreach (var row in SortedByZhLength)
-            if (string.Equals(row.Zh, q, StringComparison.Ordinal))
+            if (string.Equals(row.Zh, q, StringComparison.OrdinalIgnoreCase))
                 return row.En;
 
         // 2. 中文名包含查询词(用户只输入了一部分)
         foreach (var row in SortedByZhLength)
-            if (row.Zh.IndexOf(q, StringComparison.Ordinal) >= 0)
+            if (row.Zh.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
                 return row.En;
 
         // 3. 查询词包含中文名(用户输入了更长的描述)
         foreach (var row in SortedByZhLength)
-            if (q.IndexOf(row.Zh, StringComparison.Ordinal) >= 0)
+            if (q.IndexOf(row.Zh, StringComparison.OrdinalIgnoreCase) >= 0)
                 return row.En;
 
         return null;
