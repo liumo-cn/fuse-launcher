@@ -165,11 +165,11 @@ if (-not $Upload) {
     Write-Host '  当前未加 -Upload，只打印命令：' -ForegroundColor Yellow
     Write-Host ''
     Write-Host '  # 1) 版本化安装包（长缓存）'
-    Write-Host ("  ossutil cp `"$setupPath`" $OssTarget --meta `"Cache-Control:public, max-age=31536000, immutable`"")
+    Write-Host ("  ossutil cp --force `"$setupPath`" $OssTarget --metadata `"Cache-Control:public, max-age=31536000, immutable`"")
     Write-Host '  # 2) latest 别名（不缓存，下载页兜底用）'
-    Write-Host ("  ossutil cp `"$setupPath`" ${OssTarget}FuseLauncher-Setup-latest.exe --meta `"Cache-Control:no-store`"")
+    Write-Host ("  ossutil cp --force `"$setupPath`" ${OssTarget}FuseLauncher-Setup-latest.exe --metadata `"Cache-Control:no-store`"")
     Write-Host '  # 3) 清单（必须最后传）'
-    Write-Host ("  ossutil cp `"$manifestPath`" $OssTarget --meta `"Cache-Control:no-store`"")
+    Write-Host ("  ossutil cp --force `"$manifestPath`" $OssTarget --metadata `"Cache-Control:no-store`"")
     Write-Host ''
     Write-Host '  确认无误后加 -Upload 重跑；或把上面三条贴到已登录 ossutil 的终端执行。'
 }
@@ -189,19 +189,20 @@ else {
     $metaFlag = if ($verText -match 'v?2\.\d') { '--metadata' } else { '--meta' }
     Ok ('ossutil 使用 ' + $metaFlag)
 
+    # ossutil 2.x 的 cp 不加 --force 不覆盖同名对象,latest 和 manifest 必然已存在,会静默跳过
     Write-Host '  先传安装包（长缓存）…'
-    & ossutil cp $setupPath $OssTarget $metaFlag 'Cache-Control:public, max-age=31536000, immutable'
+    & ossutil cp --force $setupPath $OssTarget $metaFlag 'Cache-Control:public, max-age=31536000, immutable'
     if ($LASTEXITCODE -ne 0) { Fail '安装包上传失败' }
 
     # latest 别名：下载页在清单读不到时兜底用。
     # 每次发布都必须跟着更新 —— 忘了传的话，兜底链接会指向上一个版本，
     # 用户下到旧包还以为是最新的（比 404 更糟）。所以必须 no-store。
     Write-Host '  传 latest 别名（不缓存）…'
-    & ossutil cp $setupPath ($OssTarget + 'FuseLauncher-Setup-latest.exe') $metaFlag 'Cache-Control:no-store'
+    & ossutil cp --force $setupPath ($OssTarget + 'FuseLauncher-Setup-latest.exe') $metaFlag 'Cache-Control:no-store'
     if ($LASTEXITCODE -ne 0) { Fail 'latest 别名上传失败' }
 
     Write-Host '  最后传清单（不缓存）…'
-    & ossutil cp $manifestPath $OssTarget $metaFlag 'Cache-Control:no-store'
+    & ossutil cp --force $manifestPath $OssTarget $metaFlag 'Cache-Control:no-store'
     if ($LASTEXITCODE -ne 0) { Fail '清单上传失败（此时安装包已在 OSS 上，可安全重试本步）' }
 }
 
