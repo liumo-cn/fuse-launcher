@@ -165,11 +165,11 @@ if (-not $Upload) {
     Write-Host '  当前未加 -Upload，只打印命令：' -ForegroundColor Yellow
     Write-Host ''
     Write-Host '  # 1) 版本化安装包（长缓存）'
-    Write-Host ("  ossutil cp --force `"$setupPath`" $OssTarget --metadata `"Cache-Control:public, max-age=31536000, immutable`"")
+    Write-Host ("  ossutil cp --force `"$setupPath`" $OssTarget --cache-control `"public, max-age=31536000, immutable`"")
     Write-Host '  # 2) latest 别名（不缓存，下载页兜底用）'
-    Write-Host ("  ossutil cp --force `"$setupPath`" ${OssTarget}FuseLauncher-Setup-latest.exe --metadata `"Cache-Control:no-store`"")
+    Write-Host ("  ossutil cp --force `"$setupPath`" ${OssTarget}FuseLauncher-Setup-latest.exe --cache-control `"no-store`"")
     Write-Host '  # 3) 清单（必须最后传）'
-    Write-Host ("  ossutil cp --force `"$manifestPath`" $OssTarget --metadata `"Cache-Control:no-store`"")
+    Write-Host ("  ossutil cp --force `"$manifestPath`" $OssTarget --cache-control `"no-store`"")
     Write-Host ''
     Write-Host '  确认无误后加 -Upload 重跑；或把上面三条贴到已登录 ossutil 的终端执行。'
 }
@@ -184,26 +184,34 @@ else {
 '@
     }
 
-    # ossutil 1.x 用 --meta，2.x 用 --metadata；先探测再用，避免版本差异
+    # ossutil 2.x:--metadata 按 "k=v" 解析,逗号带空格的值会被拆成多个 header
+    # ("x-oss-meta- max-age" 直接报错),必须用专用 --cache-control;1.x 只有 --meta
     $verText = (& ossutil version 2>&1 | Out-String)
-    $metaFlag = if ($verText -match 'v?2\.\d') { '--metadata' } else { '--meta' }
-    Ok ('ossutil 使用 ' + $metaFlag)
+    $isV2 = $verText -match 'v?2\.\d'
+    Ok ('ossutil ' + $(if ($isV2) { '2.x,用 --cache-control' } else { '1.x,用 --meta' }))
+
+    function PushOss([string]$src, [string]$dst, [string]$cc) {
+        if ($isV2) {
+            & ossutil cp --force $src $dst '--cache-control' $cc
+        }
+        else {
+            & ossutil cp --force $src $dst '--meta' ("Cache-Control:" + $cc)
+        }
+        if ($LASTEXITCODE -ne 0) { Fail ('上传失败:' + $dst) }
+    }
 
     # ossutil 2.x 的 cp 不加 --force 不覆盖同名对象,latest 和 manifest 必然已存在,会静默跳过
     Write-Host '  先传安装包（长缓存）…'
-    & ossutil cp --force $setupPath $OssTarget $metaFlag 'Cache-Control:public, max-age=31536000, immutable'
-    if ($LASTEXITCODE -ne 0) { Fail '安装包上传失败' }
+    PushOss $setupPath $OssTarget 'public, max-age=31536000, immutable'
 
     # latest 别名：下载页在清单读不到时兜底用。
     # 每次发布都必须跟着更新 —— 忘了传的话，兜底链接会指向上一个版本，
     # 用户下到旧包还以为是最新的（比 404 更糟）。所以必须 no-store。
     Write-Host '  传 latest 别名（不缓存）…'
-    & ossutil cp --force $setupPath ($OssTarget + 'FuseLauncher-Setup-latest.exe') $metaFlag 'Cache-Control:no-store'
-    if ($LASTEXITCODE -ne 0) { Fail 'latest 别名上传失败' }
+    PushOss $setupPath ($OssTarget + 'FuseLauncher-Setup-latest.exe') 'no-store'
 
     Write-Host '  最后传清单（不缓存）…'
-    & ossutil cp --force $manifestPath $OssTarget $metaFlag 'Cache-Control:no-store'
-    if ($LASTEXITCODE -ne 0) { Fail '清单上传失败（此时安装包已在 OSS 上，可安全重试本步）' }
+    PushOss $manifestPath $OssTarget 'no-store'
 }
 
 # ---------- 上线自检 ----------
