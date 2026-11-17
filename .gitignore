@@ -57,3 +57,6 @@ docs/audit-2026-11-07-oss-1.2.0.md
 
 # IDE 本地配置
 /.idea/
+
+# 抖音发布素材(本地工作稿,不入仓库)
+promote/douyin/
