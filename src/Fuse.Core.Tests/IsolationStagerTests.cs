@@ -63,15 +63,72 @@ public class IsolationStagerTests : IDisposable
         MakeSharedContent();
         IsolationStager.EnsureStaged(_root, "v1", _install);
 
-        // 首轮已把检测翻转为隔离:第二轮走 early-skip,不再产生任何改动
+        // Fuse 已 stage 的版本第二轮走增量补链:没有新内容就没有任何改动
         var second = IsolationStager.EnsureStaged(_root, "v1", _install);
 
-        Assert.Equal("already isolated", second.Skipped);
+        Assert.Null(second.Skipped);
         Assert.False(second.Changed);
         Assert.Empty(second.Failed);
         // 共享内容与 junction 都保持原状
         Assert.True(File.Exists(Path.Combine(_root, "saves", "world", "level.dat")));
         Assert.True(Directory.Exists(Path.Combine(_root, "versions", "v1", "saves")));
+    }
+
+    [Fact]
+    public void Stage_LinksGenericContentDirs_SkipsLauncherOwnedAndHidden()
+    {
+        MakeSharedContent();
+        WriteAllUnder(Path.Combine(_root, "kubejs", "startup_scripts"), "main.js", "vefc");
+        WriteAllUnder(Path.Combine(_root, "schematics"), "house.schema", "x");
+        Directory.CreateDirectory(Path.Combine(_root, "tools"));
+        Directory.CreateDirectory(Path.Combine(_root, ".zcode"));
+
+        var r = IsolationStager.EnsureStaged(_root, "v1", _install);
+
+        Assert.Contains("kubejs", r.Junctions);
+        Assert.Contains("schematics", r.Junctions);
+        // 游戏透过 junction 看见共享 kubejs 脚本
+        Assert.True(File.Exists(Path.Combine(_root, "versions", "v1", "kubejs", "startup_scripts", "main.js")));
+        // 启动器自有目录与隐藏目录不进版本目录
+        Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v1", "tools")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v1", ".zcode")));
+    }
+
+    [Fact]
+    public void Stage_StagedVersion_TopsUpRootDirsAddedLater()
+    {
+        // 香草纪元事故回归:隔离之后整合包才把 kubejs 落到共享根,下一次启动必须补上
+        MakeSharedContent();
+        IsolationStager.EnsureStaged(_root, "v1", _install);
+        WriteAllUnder(Path.Combine(_root, "kubejs", "startup_scripts"), "main.js", "vefc");
+
+        var second = IsolationStager.EnsureStaged(_root, "v1", _install);
+
+        Assert.Contains("kubejs", second.Junctions);
+        Assert.True(File.Exists(Path.Combine(_root, "versions", "v1", "kubejs", "startup_scripts", "main.js")));
+    }
+
+    [Fact]
+    public void Unstage_RemovesGenericJunctions_LeavesSharedContent()
+    {
+        MakeSharedContent();
+        WriteAllUnder(Path.Combine(_root, "kubejs"), "main.js", "vefc");
+        var versionDir = Path.Combine(_root, "versions", "v1");
+        IsolationStager.EnsureStaged(_root, "v1", _install);
+
+        IsolationStager.Unstage(versionDir);
+
+        Assert.False(Directory.Exists(Path.Combine(versionDir, "kubejs")));
+        Assert.False(Directory.Exists(Path.Combine(versionDir, "saves")));
+        // 共享内容完好
+        Assert.True(File.Exists(Path.Combine(_root, "kubejs", "main.js")));
+        Assert.True(File.Exists(Path.Combine(_root, "mods", "a.jar")));
+    }
+
+    private static void WriteAllUnder(string dir, string fileName, string content)
+    {
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, fileName), content);
     }
 
     [Fact]

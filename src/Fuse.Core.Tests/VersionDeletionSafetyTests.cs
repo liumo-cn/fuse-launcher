@@ -116,6 +116,7 @@ public class VersionDeletionSafetyTests : IDisposable
         var expected = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "versions/v1", "versions/v1/v1.json", "versions/v1/v1.jar",
+            "versions/v1/.fuse-staged",
             "versions/v1/saves[link]", "versions/v1/mods[link]",
             "versions/v1/config", "versions/v1/resourcepacks", "versions/v1/shaderpacks",
             "versions/v1/options.txt",
