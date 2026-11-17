@@ -175,7 +175,7 @@ public static class ModrinthSource
 
         var older = candidates
             .Where(v => HasVersionAtOrBelow(v, gameVersion))
-            .OrderByDescending(v => MaxVersionAtOrBelow(v, gameVersion))
+            .OrderByDescending(v => MaxVersionAtOrBelow(v, gameVersion), Comparer<Fuse.Core.ModConflict.MavenVersion?>.Create((a, b) => a == null ? (b == null ? 0 : -1) : (b == null ? 1 : a.CompareTo(b))))
             .FirstOrDefault();
         if (older != null) return ParseVersionFile(older);
 
@@ -197,7 +197,7 @@ public static class ModrinthSource
         return candidates
             .Where(v => MatchesExactGameVersion(v, gameVersion) || HasVersionAtOrBelow(v, gameVersion))
             .OrderByDescending(v => MatchesExactGameVersion(v, gameVersion))
-            .ThenByDescending(v => MaxVersionAtOrBelow(v, gameVersion))
+            .ThenByDescending(v => MaxVersionAtOrBelow(v, gameVersion), Comparer<Fuse.Core.ModConflict.MavenVersion?>.Create((a, b) => a == null ? (b == null ? 0 : -1) : (b == null ? 1 : a.CompareTo(b))))
             .Select(ParseVersionFile)
             .ToList();
     }
@@ -205,28 +205,26 @@ public static class ModrinthSource
     /// <summary>该版本是否有 game_versions 落在当前版本或更早(不含更新的补丁)。</summary>
     private static bool HasVersionAtOrBelow(JObject version, string current)
     {
-        var currentParsed = Fuse.Core.ModConflict.VersionRange.Parse(current);
-        if (currentParsed == null) return false;
+        if (!Fuse.Core.ModConflict.MavenVersion.TryCreate(current, out var currentParsed)) return false;
         foreach (var gv in (version["game_versions"] as JArray)?.Values<string>() ?? Enumerable.Empty<string>())
         {
-            var parsed = Fuse.Core.ModConflict.VersionRange.Parse(gv ?? "");
-            if (parsed != null && parsed.CompareTo(currentParsed) <= 0) return true;
+            if (Fuse.Core.ModConflict.MavenVersion.TryCreate(gv ?? "", out var parsed) &&
+                parsed.CompareTo(currentParsed) <= 0) return true;
         }
         return false;
     }
 
-    private static int MaxVersionAtOrBelow(JObject version, string current)
+    /// <summary>game_versions 里 ≤ 当前版本的最接近者(选版排序用);没有返回 null。</summary>
+    private static Fuse.Core.ModConflict.MavenVersion? MaxVersionAtOrBelow(JObject version, string current)
     {
-        var currentParsed = Fuse.Core.ModConflict.VersionRange.Parse(current);
-        var best = -1;
-        if (currentParsed == null) return best;
+        if (!Fuse.Core.ModConflict.MavenVersion.TryCreate(current, out var currentParsed)) return null;
+        Fuse.Core.ModConflict.MavenVersion? best = null;
         foreach (var gv in (version["game_versions"] as JArray)?.Values<string>() ?? Enumerable.Empty<string>())
         {
-            var parsed = Fuse.Core.ModConflict.VersionRange.Parse(gv ?? "");
-            if (parsed == null) continue;
+            if (!Fuse.Core.ModConflict.MavenVersion.TryCreate(gv ?? "", out var parsed)) continue;
             if (parsed.Major != currentParsed.Major) continue;
-            var key = parsed.Minor * 1000 + parsed.Patch;
-            if (parsed.CompareTo(currentParsed) <= 0 && key > best) best = key;
+            if (parsed.CompareTo(currentParsed) > 0) continue;
+            if (best == null || parsed.CompareTo(best) > 0) best = parsed;
         }
         return best;
     }

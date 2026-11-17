@@ -1815,7 +1815,8 @@ public class VersionDetailPanel : UserControl
             {
                 await Fuse.Core.ModConflict.ModConflictFixer.ApplyAsync(
                     newMods, targetVersion, "fabric", actions, AppServices.Http,
-                    new Progress<string>(msg => Toast(msg, _conflictCard)), CancellationToken.None);
+                    new Progress<string>(msg => Toast(msg, _conflictCard)), CancellationToken.None,
+                    dependencyGraph: report.Mods);
             }
 
             new InfoWindow("已切换到 " + targetVersion,
@@ -2789,7 +2790,7 @@ public class VersionDetailPanel : UserControl
             var outcome = await Fuse.Core.ModConflict.ModConflictFixer.ApplyAsync(
                 ModsDir(), _gameVersion, _loader, dialog.Selected, AppServices.Http,
                 new Progress<string>(msg => Dispatcher.BeginInvoke(new Action(() => Toast(msg, _conflictCard)))),
-                CancellationToken.None);
+                CancellationToken.None, dependencyGraph: report.Mods);
 
             var message = outcome.Applied.Count + " 项已修复";
             if (outcome.Failed.Count > 0)

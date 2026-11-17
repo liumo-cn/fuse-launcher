@@ -116,7 +116,8 @@ public static class AppLauncher
                             // 丢失 loaders facet,Fabric/Forge 版本混着挑,可能装错加载器的前置
                             var outcome = await Fuse.Core.ModConflict.ModConflictFixer.ApplyAsync(
                                 modsDir, gameVersion, loader, dialog.Selected, AppServices.Http,
-                                new Progress<string>(msg => status(msg)), System.Threading.CancellationToken.None);
+                                new Progress<string>(msg => status(msg)), System.Threading.CancellationToken.None,
+                                dependencyGraph: report.Mods);
                             if (outcome.Failed.Count > 0)
                             {
                                 new InfoWindow("模组冲突修复",

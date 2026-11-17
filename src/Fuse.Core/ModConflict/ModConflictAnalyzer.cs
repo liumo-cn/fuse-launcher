@@ -40,6 +40,8 @@ public sealed class ModConflictReport
     /// <summary>模组要求的游戏版本(用于建议切换)。</summary>
     public string? SuggestedGameVersion { get; init; }
     public List<ModFixAction> Actions { get; init; } = new();
+    /// <summary>已启用模组的依赖图快照(修复前模拟新违规用)。</summary>
+    public List<ModDependencyGraph> Mods { get; init; } = new();
     public bool HasProblems => Actions.Count > 0;
 }
 
@@ -51,9 +53,9 @@ public static class ModConflictAnalyzer
 {
     private static bool IsNewer(string candidate, string current)
     {
-        var a = VersionRange.Parse(candidate);
-        var b = VersionRange.Parse(current);
-        return a != null && b != null && a.CompareTo(b) > 0;
+        return MavenVersion.TryCreate(candidate, out var a)
+               && MavenVersion.TryCreate(current, out var b)
+               && a.CompareTo(b) > 0;
     }
 
     private static readonly HashSet<string> BuiltIns = new(StringComparer.OrdinalIgnoreCase)
@@ -78,8 +80,11 @@ public static class ModConflictAnalyzer
         foreach (var group in enabled.GroupBy(m => m.Id, StringComparer.OrdinalIgnoreCase))
         {
             var list = group.ToList();
-            var keep = list.OrderByDescending(m => VersionRange.Parse(m.Version), Comparer<VersionRange.Version?>.Create(
-                (a, b) => (a?.CompareTo(b) ?? (b == null ? 0 : -1)))).First();
+            var keep = list.OrderByDescending(
+                m => MavenVersion.TryCreate(m.Version, out var v) ? v : null,
+                Comparer<MavenVersion?>.Create((a, b) => a == null
+                    ? (b == null ? 0 : -1)
+                    : (b == null ? 1 : a.CompareTo(b)))).First();
             effective[keep.Id] = keep;
             foreach (var other in list.Where(m => !ReferenceEquals(m, keep)))
             {
@@ -130,6 +135,7 @@ public static class ModConflictAnalyzer
                     continue;
                 }
 
+                var known = MavenVersion.TryCreate(installed.Version, out _);
                 if (!VersionRange.Matches(installed.Version, constraint))
                 {
                     actions.Add(new ModFixAction
@@ -143,7 +149,10 @@ public static class ModConflictAnalyzer
                         Constraint = constraint,
                         InstalledVersion = installed.Version,
                         InstalledSha1 = installed.Sha1,
-                        Reason = $"{mod.Name} 需要 {installed.Name} {VersionRange.Describe(constraint)}，当前是 {installed.Version}",
+                        // 未知版本(解析器不认识)不混在「不满足」里,也不自动替换(2026-11-15 用户拍板)
+                        Reason = $"{mod.Name} 需要 {installed.Name} {VersionRange.Describe(constraint)}，当前是 {installed.Version}"
+                                 + (known ? "" : "（版本格式无法识别，需手动确认）"),
+                        CanAutoFix = known,
                     });
                 }
             }
@@ -254,6 +263,14 @@ public static class ModConflictAnalyzer
             GameVersion = gameVersion,
             Loader = loader,
             ModCount = enabled.Count,
+            Mods = effective.Values.Select(m => new ModDependencyGraph
+            {
+                Id = m.Id,
+                Name = m.Name,
+                FileName = m.FileName,
+                Version = m.Version,
+                Depends = new Dictionary<string, string>(m.Depends, StringComparer.OrdinalIgnoreCase),
+            }).ToList(),
             SuggestedGameVersion = suggestedGame,
             Actions = actions
                 .GroupBy(a => a.Kind + "|" + a.ModId + "|" + a.FileName)
@@ -261,4 +278,14 @@ public static class ModConflictAnalyzer
                 .ToList(),
         };
     }
+}
+
+/// <summary>已启用模组的依赖图节点(修复前模拟用,与 InstalledMod 解耦)。</summary>
+public sealed class ModDependencyGraph
+{
+    public string Id { get; init; } = "";
+    public string Name { get; init; } = "";
+    public string FileName { get; init; } = "";
+    public string Version { get; init; } = "";
+    public Dictionary<string, string> Depends { get; init; } = new(StringComparer.OrdinalIgnoreCase);
 }

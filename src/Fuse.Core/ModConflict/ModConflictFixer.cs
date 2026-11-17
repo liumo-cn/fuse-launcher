@@ -15,6 +15,8 @@ public sealed class ModFixOutcome
     public string BackupDirectory { get; init; } = "";
     public List<string> Applied { get; init; } = new();
     public List<string> Failed { get; init; } = new();
+    /// <summary>修复前模拟发现的新违规告警(未自动执行,需人工确认)。</summary>
+    public List<string> Warnings { get; init; } = new();
 }
 
 /// <summary>
@@ -29,16 +31,50 @@ public static class ModConflictFixer
     public static async Task<ModFixOutcome> ApplyAsync(
         string modsDir, string gameVersion, string loader,
         IEnumerable<ModFixAction> actions, HttpClient http,
-        IProgress<string>? progress, CancellationToken ct)
+        IProgress<string>? progress, CancellationToken ct,
+        IReadOnlyList<ModDependencyGraph>? dependencyGraph = null)
     {
         var applied = new List<string>();
         var failed = new List<string>();
+        var warnings = new List<string>();
         var backup = Backup(modsDir);
         // fail-closed:备份失败就绝不往下动手(修复会禁用/覆盖用户文件,无备份=不可逆)
         if (backup == null)
             throw new IOException("[liumo-guard] 模组目录备份创建失败(liumo_secure_launcher: 拒绝无备份修复)," +
                                   "请检查 mods 目录权限后重试:" + modsDir);
         progress?.Report("已备份模组目录");
+
+        // 修复前模拟依赖图(2026-11-15 用户拍板):先解析替换类动作的目标版本,
+        // 检查修复后的版本会不会违反其他模组的约束——会产生新违规的替换跳过并告警。
+        var planned = new Dictionary<string, ResolvedFile>(StringComparer.OrdinalIgnoreCase);
+        var vetoed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (dependencyGraph != null)
+        {
+            foreach (var action in actions.Where(a => a.Kind == ModFixKind.ReplaceVersion))
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var resolved = await ResolveAsync(
+                        http, action.DependencyId, gameVersion, loader, action.Constraint, ct,
+                        action.InstalledSha1).ConfigureAwait(false);
+                    if (resolved == null) continue;
+                    planned[action.DependencyId] = resolved;
+                    foreach (var problem in SimulateReplacementViolations(
+                        dependencyGraph,
+                        new[] { (action.DependencyId, resolved.VersionNumber) }))
+                    {
+                        warnings.Add(problem);
+                        vetoed.Add(action.DependencyId);   // 新违规:这个替换不能自动执行
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 预解析失败不否决动作,主循环里会按原逻辑再试
+                    OriginLog("[fixer] pre-resolve failed: " + action.DependencyId + " · " + ex.Message);
+                }
+            }
+        }
 
         foreach (var action in actions)
         {
@@ -56,8 +92,15 @@ public static class ModConflictFixer
 
                     case ModFixKind.ReplaceVersion:
                     {
+                        if (vetoed.Contains(action.DependencyId))
+                        {
+                            failed.Add("已跳过:" + action.DependencyName + " —— 修复后会违反其他模组的要求(见告警),请手动选版本");
+                            break;
+                        }
                         progress?.Report("正在查找 " + action.DependencyName + " 的兼容版本…");
-                        var resolved = await ResolveAsync(
+                        var resolved = planned.TryGetValue(action.DependencyId, out var pre)
+                            ? pre
+                            : await ResolveAsync(
                             http, action.DependencyId, gameVersion, loader, action.Constraint, ct, action.InstalledSha1)
                             .ConfigureAwait(false);
                         if (resolved == null)
@@ -111,7 +154,36 @@ public static class ModConflictFixer
             BackupDirectory = backup ?? "",
             Applied = applied,
             Failed = failed,
+            Warnings = warnings,
         };
+    }
+
+    /// <summary>
+    /// 模拟替换后的依赖图,找出「基线满足、修复后不满足」的新违规
+    /// (每个违规一条:「替换 {depId} 到 {version} 会违反 {mod.Name} 的 {constraint}」)。
+    /// </summary>
+    public static IReadOnlyList<string> SimulateReplacementViolations(
+        IReadOnlyList<ModDependencyGraph> graph,
+        IReadOnlyList<(string DepId, string NewVersion)> replacements)
+    {
+        var problems = new List<string>();
+        var versions = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in graph) versions[m.Id] = m.Version;
+
+        foreach (var (depId, newVersion) in replacements)
+        {
+            foreach (var mod in graph)
+            {
+                if (!mod.Depends.TryGetValue(depId, out var constraint)) continue;
+                var okAfter = VersionRange.Matches(newVersion, constraint);
+                if (okAfter) continue;
+                var okBefore = versions.TryGetValue(depId, out var baseline) &&
+                               VersionRange.Matches(baseline, constraint);
+                if (!okBefore) continue;   // 基线就不满足:不是本次修复引入的
+                problems.Add($"替换 {depId} 到 {newVersion} 会违反 {mod.Name} 的要求 {constraint}");
+            }
+        }
+        return problems;
     }
 
     private sealed record ResolvedFile(string FileName, string Url, string Sha1, string VersionNumber);
