@@ -964,6 +964,22 @@ public static class AppServices
             ErrorReporter.Report("下载失败：" + record.Name, null,
                 "任务 " + record.TaskId + " · " + record.ErrorMessage);
         };
+        // 整合包装完立即虚拟隔离:不等下次启动,会话内第一次启动的行为就是隔离后的
+        Queue.TaskChanged += record =>
+        {
+            if (record.Kind != "modpack-install" || record.Status != DownloadTaskStatus.Completed) return;
+            try
+            {
+                var meta = Newtonsoft.Json.Linq.JObject.Parse(record.Meta ?? "");
+                var versionsRoot = meta.Value<string>("versionsRoot");
+                if (string.IsNullOrEmpty(versionsRoot) || !Directory.Exists(versionsRoot)) return;
+                StageGameDirectory(Path.GetDirectoryName(versionsRoot)!);
+            }
+            catch (Exception ex)
+            {
+                WidgetWindow.Boot("[isolation] post-import stage error: " + ex.Message);
+            }
+        };
     }
 
     /// <summary>管线登录节点：正版令牌可用时优先正版，否则离线档案。</summary>

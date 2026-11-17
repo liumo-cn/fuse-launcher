@@ -81,6 +81,7 @@ public class IsolationStagerTests : IDisposable
         WriteAllUnder(Path.Combine(_root, "kubejs", "startup_scripts"), "main.js", "vefc");
         WriteAllUnder(Path.Combine(_root, "schematics"), "house.schema", "x");
         Directory.CreateDirectory(Path.Combine(_root, "tools"));
+        Directory.CreateDirectory(Path.Combine(_root, "runtime"));
         Directory.CreateDirectory(Path.Combine(_root, ".zcode"));
 
         var r = IsolationStager.EnsureStaged(_root, "v1", _install);
@@ -91,6 +92,7 @@ public class IsolationStagerTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_root, "versions", "v1", "kubejs", "startup_scripts", "main.js")));
         // 启动器自有目录与隐藏目录不进版本目录
         Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v1", "tools")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v1", "runtime")));
         Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v1", ".zcode")));
     }
 

@@ -32,7 +32,8 @@ public static class VersionExporter
     private static readonly string[] ExcludedDirs =
     {
         "logs", "crash-reports", "bin", "cache",
-        "assets", "libraries", "versions", "instances", "backups", "runtimes",
+        "assets", "libraries", "versions", "instances", "backups", "runtimes", "runtime",
+        "telemetry", "webcache2", "NVIDIA",
     };
 
     /// <summary>排除项:个人数据文件(键位/视频设置、服务器列表、账号缓存),不随版本分发。</summary>

@@ -15,10 +15,11 @@ namespace Fuse.Core.Installer;
 /// </summary>
 public static class InstanceBackup
 {
-    /// <summary>顶层不参与备份的目录(日志/缓存/临时)。</summary>
+    /// <summary>顶层不参与备份的目录(日志/缓存/临时/运行时)。</summary>
     private static readonly HashSet<string> ExcludedTopDirs = new(StringComparer.OrdinalIgnoreCase)
     {
-        "logs", "crash-reports", "cache", "bin",
+        "logs", "crash-reports", "cache", "bin", "runtime", "runtimes",
+        "telemetry", "webcache2", "NVIDIA",
     };
 
     public sealed class BackupInfo

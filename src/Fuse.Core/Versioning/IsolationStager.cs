@@ -39,7 +39,7 @@ public static class IsolationStager
     private static readonly HashSet<string> LauncherDirs = new(StringComparer.OrdinalIgnoreCase)
     {
         "versions", "libraries", "assets", "instances", "data", "bin", "logs",
-        "crash-reports", "screenshots", "telemetry", "cache", "tools",
+        "crash-reports", "screenshots", "telemetry", "cache", "tools", "runtime", "runtimes",
     };
 
     /// <summary>Fuse 已隔离版本的标记文件;有它才允许后续启动增量补链。</summary>
