@@ -73,6 +73,77 @@ public class ModpackImportIsolationTests : IDisposable
         throw new TimeoutException("任务未到 " + status + ": " + last?.Status + " " + last?.ErrorMessage);
     }
 
+    /// <summary>合成 CurseForge zip:manifest.json 的 files 为空(离线安全),内容全在 overrides。</summary>
+    private static string BuildCfZip(string path)
+    {
+        // 不带 modLoaders:离线沙盒跳过 Forge 安装;真包会带,队列内正常走加载器安装
+        const string manifest = """
+            {"minecraft":{"version":"1.20.1"},
+             "manifestType":"minecraftModpack","manifestVersion":1,
+             "name":"CF Demo Pack","version":"2.0","author":"tester","files":[]}
+            """;
+        using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
+        var e0 = zip.CreateEntry("manifest.json");
+        using (var w = new StreamWriter(e0.Open())) w.Write(manifest);
+        void Add(string rel, string content)
+        {
+            var e = zip.CreateEntry(rel);
+            using var w = new StreamWriter(e.Open()); w.Write(content);
+        }
+        Add("overrides/mods/cf-mod.jar", "jar");
+        Add("overrides/kubejs/startup_scripts/cf.js", "StartupEvents.listen(e => {})");
+        Add("client-overrides/config/option.toml", "a = 1");
+        return path;
+    }
+
+    [Fact]
+    public async Task ImportCurseForgeZip_OverridesLand_AndStagingLinksKubejs()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "mcdl-cfz-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var gvDir = Path.Combine(_root, "versions", "1.20.1");
+            Directory.CreateDirectory(gvDir);
+            File.WriteAllText(Path.Combine(gvDir, "1.20.1.json"), """{"id":"1.20.1","type":"release"}""");
+            var zipPath = BuildCfZip(Path.Combine(dir, "cf-demo.zip"));
+            var store = new DownloadTaskStore(Path.Combine(dir, "tasks.json"));
+            using var http = new HttpClient();
+            var queue = DownloadQueue.CreateDefault(store, http, maxConcurrent: 2, smallFileParallelism: 2);
+
+            var meta = new JObject
+            {
+                ["cfZipLocalPath"] = zipPath,
+                ["packSlug"] = "CF Demo Pack",
+                ["versionNumber"] = "2.0",
+                ["title"] = "CF Demo Pack",
+                ["versionsRoot"] = Path.Combine(_root, "versions"),
+                ["librariesRoot"] = Path.Combine(_root, "libraries"),
+                ["assetsRoot"] = Path.Combine(_root, "assets"),
+                ["instancesRoot"] = Path.Combine(_root, "instances"),
+                ["instanceDir"] = _root,
+            }.ToString();
+            var task = queue.Enqueue(new DownloadTaskRecord { Name = "CF Demo Pack", Kind = "modpack-install", Meta = meta });
+            await WaitForStatusAsync(store, task.TaskId, DownloadTaskStatus.Completed);
+
+            // overrides + client-overrides 全部落地共享根
+            Assert.True(File.Exists(Path.Combine(_root, "mods", "cf-mod.jar")));
+            Assert.True(File.Exists(Path.Combine(_root, "kubejs", "startup_scripts", "cf.js")));
+            Assert.True(File.Exists(Path.Combine(_root, "config", "option.toml")));
+            // 版本 json 带 fuseModpack 标记并继承原版底座
+            var json = File.ReadAllText(Path.Combine(_root, "versions", "cfdemopack-2.0", "cfdemopack-2.0.json"));
+            Assert.Contains("fuseModpack", json);
+            Assert.Contains("\"inheritsFrom\": \"1.20.1\"", json);
+
+            var staged = IsolationStager.EnsureStaged(_root, "cfdemopack-2.0", _install);
+            Assert.Contains("kubejs", staged.Junctions);
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch (IOException) { }
+        }
+    }
+
     [Fact]
     public async Task ImportToSharedRoot_ThenStaged_ContentVisible_AndDeleteSafe()
     {

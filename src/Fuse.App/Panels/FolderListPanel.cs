@@ -410,8 +410,13 @@ public sealed class FolderListPanel : UserControl
                 e.FullName.Equals("modrinth.index.json", StringComparison.OrdinalIgnoreCase));
             if (entry == null)
             {
-                // 不是 Modrinth 格式:先按已知格式分类;解压式整合包(博主自制 zip)走"选基础版本"导入
+                // 不是 Modrinth 格式:先按已知格式分类;CurseForge zip 走现场合成导入,解压式走"选基础版本"
                 var verdict = ClassifyArchive(zip);
+                if (verdict.Kind == "curseforge")
+                {
+                    ImportCurseForgeZip(path);
+                    return;
+                }
                 if (verdict.Kind == "plain")
                 {
                     ImportPlainPack(path);
@@ -438,7 +443,57 @@ public sealed class FolderListPanel : UserControl
             return;
         }
 
-        var packVersionId = DownloadQueue.SanitizePackVersionId(slug, versionNumber);
+        EnqueueLocalModpack(new JObject
+        {
+            ["mrpackLocalPath"] = path,
+            ["packSlug"] = slug,
+        }, title, versionNumber);
+    }
+
+    /// <summary>CurseForge zip(manifest.json+overrides)直接导入:队列内现场合成 mrpack 全自动安装。</summary>
+    private void ImportCurseForgeZip(string zipPath)
+    {
+        if (!Fuse.Core.Sources.CurseForgeSource.IsConfigured)
+        {
+            Show(new InfoWindow("暂时无法导入 CurseForge 整合包",
+                "CurseForge 接口未配置,无法自动解析包内文件。\n请先在设置里配置 CurseForge 接口,或让作者提供 Modrinth(.mrpack)版本。"));
+            return;
+        }
+
+        string title, versionNumber;
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(zipPath);
+            var manifestEntry = zip.Entries.FirstOrDefault(e =>
+                e.FullName.Equals("manifest.json", StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException("压缩包缺少 manifest.json");
+            using var reader = new StreamReader(manifestEntry.Open());
+            var manifest = JObject.Parse(reader.ReadToEnd());
+            var gameVersion = manifest["minecraft"]?.Value<string>("version") ?? "";
+            if (string.IsNullOrEmpty(gameVersion))
+                throw new InvalidOperationException("manifest 缺少 minecraft.version");
+            title = manifest.Value<string>("name") ?? Path.GetFileNameWithoutExtension(zipPath);
+            versionNumber = manifest.Value<string>("version") ?? "1.0";
+        }
+        catch (Exception ex)
+        {
+            Show(new InfoWindow("无法导入整合包", ex.Message));
+            return;
+        }
+
+        EnqueueLocalModpack(new JObject
+        {
+            ["cfZipLocalPath"] = zipPath,
+            ["packSlug"] = title,
+        }, title, versionNumber);
+    }
+
+    /// <summary>本地包(mrpack / CurseForge zip)入队全自动安装;装完把显示名写进版本档案。</summary>
+    private void EnqueueLocalModpack(JObject fields, string title, string versionNumber)
+    {
+        var root = AppServices.ActiveGameDirectory;
+        var packVersionId = DownloadQueue.SanitizePackVersionId(
+            fields.Value<string>("packSlug") ?? "", versionNumber);
         var versionsRoot = AppServices.VersionsRoot;
         if (File.Exists(Path.Combine(versionsRoot, packVersionId, packVersionId + ".json")))
         {
@@ -449,8 +504,6 @@ public sealed class FolderListPanel : UserControl
 
         var meta = new JObject
         {
-            ["mrpackLocalPath"] = path,
-            ["packSlug"] = slug,
             ["versionNumber"] = versionNumber,
             ["title"] = title,
             ["versionsRoot"] = versionsRoot,
@@ -459,13 +512,14 @@ public sealed class FolderListPanel : UserControl
             ["instancesRoot"] = Path.Combine(root, "instances"),
             // 外部目录(共享根布局)没有 instances 隔离:实例目录就是根目录本身
             ["instanceDir"] = AppServices.InstanceDirectoryIn(root, packVersionId),
-        }.ToString();
+        };
+        foreach (var prop in fields.Properties()) meta[prop.Name] = prop.Value;
 
         var task = AppServices.Queue!.Enqueue(new DownloadTaskRecord
         {
             Name = title,
             Kind = "modpack-install",
-            Meta = meta,
+            Meta = meta.ToString(),
         });
         Toast.ShowNearOrb("整合包安装已开始:" + title);
 
@@ -517,10 +571,7 @@ public sealed class FolderListPanel : UserControl
                 using var reader = new StreamReader(manifest.Open());
                 var json = JObject.Parse(reader.ReadToEnd());
                 if (json.Value<string>("manifestType") == "minecraftModpack")
-                    return ("curseforge",
-                        "这个 zip 是 CurseForge 格式的整合包。\n\n" +
-                        "启动器目前只支持 Modrinth 格式(.mrpack):CurseForge 整合包需要官方授权才能自动下载文件,暂时装不了。\n\n" +
-                        "可以让整合包作者提供 Modrinth 版本,或先用其他启动器安装这一个包。");
+                    return ("curseforge", "");
             }
             catch (Exception)
             {

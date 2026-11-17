@@ -61,10 +61,11 @@ public static class IsolationStager
         var versionDir = Path.Combine(root, "versions", versionId);
         if (!Directory.Exists(versionDir)) { result.Skipped = "version missing"; return result; }
 
-        // 不是 Fuse stage 出来的隔离布局(PCL 等原生隔离)不动:它缺的目录就该缺,
-        // 把共享内容 junction 进去反而会张冠李戴。Fuse 自己 stage 的(有标记或
-        // 五个内容目录里有 junction)允许每次启动增量补链
-        if (!WasStagedByFuse(versionDir) && InstanceLayout.IsIsolated(versionDir))
+        // 不是 Fuse 管理的隔离布局(PCL 等原生隔离)不动:它缺的目录就该缺,
+        // 把共享内容 junction 进去反而会张冠李戴。Fuse stage 过的(标记/内容目录 junction)
+        // 和整合包版本(fuseModpack json,升级换目录后没有标记)允许每次启动增量补链
+        if (!WasStagedByFuse(versionDir) && !IsFuseManagedVersion(versionDir) &&
+            InstanceLayout.IsIsolated(versionDir))
         {
             result.Skipped = "already isolated";
             return result;
@@ -151,6 +152,25 @@ public static class IsolationStager
         }
         catch (Exception) { }
         return false;
+    }
+
+    /// <summary>版本 json 带 fuse 整合包标记(fuseModpack/fusePackSlug)就归 Fuse 管:
+    /// 升级整合包会整个换掉实例目录,标记丢失但有它就能继续增量补链。</summary>
+    private static bool IsFuseManagedVersion(string versionDir)
+    {
+        try
+        {
+            var jsonPath = Path.Combine(versionDir,
+                Path.GetFileName(versionDir.TrimEnd(Path.DirectorySeparatorChar)) + ".json");
+            if (!File.Exists(jsonPath)) return false;
+            var text = File.ReadAllText(jsonPath);
+            return text.IndexOf("\"fuseModpack\"", StringComparison.Ordinal) >= 0 ||
+                   text.IndexOf("fusePackSlug", StringComparison.Ordinal) >= 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>创建目录 junction(免管理员权限);目标或链接已存在视为成功。</summary>

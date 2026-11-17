@@ -601,6 +601,8 @@ public sealed class DownloadQueue
             public string? MrpackSha1 { get; set; }
             /// <summary>本地 .mrpack 路径(文件夹列表「导入整合包」);设置后跳过下载。</summary>
             public string? MrpackLocalPath { get; set; }
+            /// <summary>本地 CurseForge zip(manifest.json+overrides):队列内现场合成等价 mrpack。</summary>
+            [JsonProperty("cfZipLocalPath")] public string? CfZipLocalPath { get; set; }
             public string? PackSlug { get; set; }
             public string? VersionNumber { get; set; }
             public string? Title { get; set; }
@@ -717,8 +719,9 @@ public sealed class DownloadQueue
             var meta = JsonConvert.DeserializeObject<ModpackInstallMeta>(record.Meta ?? "{}")
                        ?? new ModpackInstallMeta();
             var hasLocalPack = !string.IsNullOrEmpty(meta.MrpackLocalPath) && File.Exists(meta.MrpackLocalPath);
+            var hasLocalCfZip = !string.IsNullOrEmpty(meta.CfZipLocalPath) && File.Exists(meta.CfZipLocalPath);
             var hasCfPack = meta.CurseForgeProjectId > 0 && !string.IsNullOrEmpty(meta.CurseForgeDownloadUrl);
-            if ((!hasLocalPack && !hasCfPack && string.IsNullOrEmpty(meta.MrpackUrl)) ||
+            if ((!hasLocalPack && !hasLocalCfZip && !hasCfPack && string.IsNullOrEmpty(meta.MrpackUrl)) ||
                 string.IsNullOrEmpty(meta.PackSlug) ||
                 string.IsNullOrEmpty(meta.VersionsRoot) || string.IsNullOrEmpty(meta.InstancesRoot))
                 throw new InvalidOperationException("整合包安装任务缺少必要参数");
@@ -743,6 +746,18 @@ public sealed class DownloadQueue
                         // 本地导入:直接拷进临时目录,跳过下载与 sha1(用户选的就是这个文件)
                         File.Copy(meta.MrpackLocalPath!, mrpackPath, overwrite: true);
                         progress.Report(0.05);
+                    }
+                    else if (hasLocalCfZip)
+                    {
+                        // 本地 CurseForge zip:直接在队列里现场合成等价 mrpack,
+                        // 进度/暂停/缺模组清单(作者禁接口下载)与在线 CF 包同一套机制
+                        var missingFiles = await Installer.ModpackInstaller.BuildCurseForgeMrpackAsync(
+                            _http, 0, meta.CfZipLocalPath!, mrpackPath,
+                            ToScaled(progress, 0.02, 0.05), cancellation, Trace).ConfigureAwait(false);
+                        if (missingFiles.Count > 0)
+                            Trace("modpack " + packVersionId + ": " + missingFiles.Count + " files not downloadable via API");
+                        cfMissingFiles = missingFiles;
+                        Trace("modpack " + packVersionId + ": local curseforge zip converted");
                     }
                     else if (hasCfPack)
                     {

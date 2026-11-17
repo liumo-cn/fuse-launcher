@@ -127,6 +127,25 @@ public class IsolationStagerTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_root, "mods", "a.jar")));
     }
 
+    [Fact]
+    public void Stage_FusePackVersionWithoutMarker_TopsUp()
+    {
+        // 香草纪元升级回归:整合包升级整个换掉实例目录,标记丢失;
+        // 只要版本 json 带 fuseModpack 就允许补链,否则 kubejs 等共享目录对游戏消失
+        MakeSharedContent();
+        WriteAllUnder(Path.Combine(_root, "kubejs", "startup_scripts"), "main.js", "vefc");
+        var versionDir = Path.Combine(_root, "versions", "v1");
+        // 伪造升级后的实例:真实 mods 目录(隔离检测翻转)+ fuseModpack json,无 .fuse-staged
+        Directory.CreateDirectory(Path.Combine(versionDir, "mods"));
+        File.WriteAllText(Path.Combine(versionDir, "v1.json"),
+            """{"id":"v1","fuseModpack":true,"fusePackSlug":"demo"}""");
+
+        var r = IsolationStager.EnsureStaged(_root, "v1", _install);
+
+        Assert.Contains("kubejs", r.Junctions);
+        Assert.True(File.Exists(Path.Combine(versionDir, "kubejs", "startup_scripts", "main.js")));
+    }
+
     private static void WriteAllUnder(string dir, string fileName, string content)
     {
         Directory.CreateDirectory(dir);
