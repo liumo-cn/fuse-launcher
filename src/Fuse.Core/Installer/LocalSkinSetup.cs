@@ -358,6 +358,9 @@ public static class LocalSkinSetup
         var cslJars = Directory.EnumerateFiles(modsDir, "*.jar", SearchOption.TopDirectoryOnly)
             .Where(f => Path.GetFileName(f).IndexOf("CustomSkinLoader", StringComparison.OrdinalIgnoreCase) >= 0)
             .ToList();
+        var cslDirs = Directory.EnumerateDirectories(modsDir, "*CustomSkinLoader*", SearchOption.TopDirectoryOnly)
+            .Where(d => Path.GetFileName(d).IndexOf("CustomSkinLoader", StringComparison.OrdinalIgnoreCase) >= 0)
+            .ToList();
 
         if (string.Equals(loader, "forge", StringComparison.OrdinalIgnoreCase))
         {
@@ -374,17 +377,39 @@ public static class LocalSkinSetup
                     // 游戏正在跑锁住了 jar:这次保持原样,下次启动会再尝试
                 }
             }
+            foreach (var dir in cslDirs.Where(d => IsIncompatibleForgeCsl(Path.GetFileName(d))))
+            {
+                try
+                {
+                    var disabled = dir + ".disabled";
+                    if (Directory.Exists(disabled)) Directory.Delete(disabled, true);
+                    Directory.Move(dir, disabled);
+                }
+                catch (Exception)
+                {
+                }
+            }
+
+            // 15.x Universal 第一次运行会把 Core 解出来;只停用 mods 里的 jar 不够,
+            // CustomSkinLoader/Core 还会被当成 mod 目录加载,继续触发同一个模块冲突
+            DisableCslBootstrap(Path.GetDirectoryName(modsDir)!);
+
             cslJars = Directory.EnumerateFiles(modsDir, "*.jar", SearchOption.TopDirectoryOnly)
                 .Where(f => Path.GetFileName(f).IndexOf("CustomSkinLoader", StringComparison.OrdinalIgnoreCase) >= 0)
                 .ToList();
+            cslDirs = Directory.EnumerateDirectories(modsDir, "*CustomSkinLoader*", SearchOption.TopDirectoryOnly)
+                .Where(d => Path.GetFileName(d).IndexOf("CustomSkinLoader", StringComparison.OrdinalIgnoreCase) >= 0)
+                .ToList();
         }
-        if (cslJars.Count > 0) return;
+        if (cslJars.Count + cslDirs.Count > 0) return;
 
         ModrinthVersionFile? file = null;
         if (string.Equals(loader, "forge", StringComparison.OrdinalIgnoreCase))
+        {
+            // 宁可这次没有皮肤,也不能退回去装 15.x 把游戏搞崩
             file = await FindForgeCslAsync(http, mc, ct).ConfigureAwait(false);
-
-        if (file == null)
+        }
+        else
         {
             try
             {
@@ -416,6 +441,34 @@ public static class LocalSkinSetup
         catch (Exception) when (!ct.IsCancellationRequested)
         {
             // 下载失败不影响本地文件铺设,下次启动会重试
+        }
+    }
+
+    /// <summary>
+    /// 停用 15.x Universal 解出来的 bootstrap 目录(CustomSkinLoader/Core)。
+    /// 只改名不移除:14.x ForgeV2 不需要它,留着也方便回滚。
+    /// </summary>
+    public static bool DisableCslBootstrap(string instanceDir)
+    {
+        try
+        {
+            var root = Path.Combine(instanceDir, "CustomSkinLoader");
+            var core = Path.Combine(root, "Core");
+            if (!Directory.Exists(core)) return false;
+            var stash = Path.Combine(root, "Core.disabled");
+            try
+            {
+                if (Directory.Exists(stash)) Directory.Delete(stash, true);
+            }
+            catch (Exception)
+            {
+            }
+            Directory.Move(core, stash);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;   // 游戏正在跑锁住了目录:下次启动再试
         }
     }
 

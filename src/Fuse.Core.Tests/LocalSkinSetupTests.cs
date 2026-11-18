@@ -166,6 +166,20 @@ public class LocalSkinSetupTests : IDisposable
         Assert.True(File.Exists(Path.Combine(dir, "ExtraList", "FuseSkinSite.json")));
     }
 
+    [Fact]
+    public void DisableCslBootstrap_MovesCoreAside_AndIsIdempotent()
+    {
+        var core = Path.Combine(_instance, "CustomSkinLoader", "Core");
+        Directory.CreateDirectory(core);
+        File.WriteAllText(Path.Combine(core, "CustomSkinLoader-Common.jar"), "jar");
+
+        Assert.True(LocalSkinSetup.DisableCslBootstrap(_instance));
+        Assert.False(Directory.Exists(core));
+        Assert.True(Directory.Exists(Path.Combine(_instance, "CustomSkinLoader", "Core.disabled")));
+        // 再跑一次没有 Core 可移,不算失败
+        Assert.False(LocalSkinSetup.DisableCslBootstrap(_instance));
+    }
+
     // ---------- Forge 上的 CSL 版本选择 ----------
 
     [Theory]
