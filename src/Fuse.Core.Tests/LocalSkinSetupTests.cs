@@ -1,11 +1,16 @@
 using System;
 using System.IO;
+using System.Linq;
 using Fuse.Core.Installer;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace Fuse.Core.Tests;
 
-/// <summary>皮肤模块:CSL 停用/恢复与本地皮肤条目清理(正版进离线服没皮肤的根因回归)。</summary>
+/// <summary>
+/// 皮肤模块:CSL 恢复、站点源排序与失效条目清理。
+/// 回归点:皮肤站账号进离线服没皮肤——旧实现把 CSL 停用了,只剩 authlib-injector。
+/// </summary>
 public class LocalSkinSetupTests : IDisposable
 {
     private readonly string _instance;
@@ -28,48 +33,159 @@ public class LocalSkinSetupTests : IDisposable
         return p;
     }
 
+    /// <summary>模拟旧版本留下的停用状态(jar 在 disabled-mods)。</summary>
+    private void StashCsl(string name)
+    {
+        var stash = Path.Combine(_instance, "disabled-mods");
+        Directory.CreateDirectory(stash);
+        File.Move(Path.Combine(_instance, "mods", name), Path.Combine(stash, name));
+    }
+
     private static void WriteConfig(string instanceDir, string loadlistJson)
     {
         var dir = Path.Combine(instanceDir, "CustomSkinLoader");
         Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "CustomSkinLoader.json"),
-            "{\"loadlist\": " + loadlistJson + "}");
+            "{\"version\":\"15.1\",\"buildNumber\":41,\"loadlist\": " + loadlistJson + "}");
+    }
+
+    private JObject ReadConfig()
+        => JObject.Parse(File.ReadAllText(
+            Path.Combine(_instance, "CustomSkinLoader", "CustomSkinLoader.json")));
+
+    private string[] EntryTypes()
+        => ReadConfig()["loadlist"]!.OfType<JObject>()
+            .Select(o => o.Value<string>("type") ?? "").ToArray();
+
+    private static string DefaultList(string littleSkinRoot = "https://littleskin.cn/csl/")
+        => """
+           [
+             {"name":"GameProfile","type":"GameProfile"},
+             {"name":"Mojang","type":"MojangAPI","apiRoot":"https://api.mojang.com/"},
+             {"name":"LittleSkin","type":"CustomSkinAPI","root":"%ROOT%"},
+             {"name":"LocalSkin","type":"Legacy","skin":"LocalSkin/skins/{USERNAME}.png"}
+           ]
+           """.Replace("%ROOT%", littleSkinRoot);
+
+    // ---------- 站点源排序 ----------
+
+    [Fact]
+    public void EnsureSiteSourceFirst_LittleSkin_GoesBeforeMojang()
+    {
+        WriteConfig(_instance, DefaultList());
+
+        var applied = LocalSkinSetup.EnsureSiteSourceFirst(_instance, "https://littleskin.cn/api/yggdrasil");
+
+        Assert.True(applied);
+        var list = ReadConfig()["loadlist"]!.OfType<JObject>().ToList();
+        // GameProfile 永远第一(服务端下发的 textures 优先)
+        Assert.Equal("GameProfile", list[0].Value<string>("type"));
+        Assert.Equal("LittleSkin", list[1].Value<string>("name"));
+        Assert.Equal("Mojang", list[2].Value<string>("name"));
+        // 旧位置那一条被删掉,不能出现重复源
+        Assert.Single(list, o => o.Value<string>("name") == "LittleSkin");
     }
 
     [Fact]
-    public void Suspend_MovesOnlyCslJars_OthersStay()
+    public void EnsureSiteSourceFirst_KeepsProfileCacheCleared()
     {
-        var csl = MakeModsJar("CustomSkinLoader_Universal-15.1.jar");
-        var other = MakeModsJar("sodium-fabric.jar");
+        WriteConfig(_instance, DefaultList());
+        var cache = Path.Combine(_instance, "CustomSkinLoader", "ProfileCache");
+        Directory.CreateDirectory(cache);
 
-        LocalSkinSetup.SuspendForExternal(_instance);
+        LocalSkinSetup.EnsureSiteSourceFirst(_instance, "https://littleskin.cn/api/yggdrasil");
 
-        Assert.False(File.Exists(csl));
-        Assert.True(File.Exists(Path.Combine(_instance, "disabled-mods", "CustomSkinLoader_Universal-15.1.jar")));
-        Assert.True(File.Exists(other));
+        Assert.False(Directory.Exists(cache));
     }
+
+    [Fact]
+    public void EnsureSiteSourceFirst_CustomSite_UsesCslRoot()
+    {
+        WriteConfig(_instance, DefaultList());
+
+        var applied = LocalSkinSetup.EnsureSiteSourceFirst(_instance, "https://skin.example.com/api/yggdrasil/");
+
+        Assert.True(applied);
+        var list = ReadConfig()["loadlist"]!.OfType<JObject>().ToList();
+        Assert.Equal("skin.example.com", list[1].Value<string>("name"));
+        Assert.Equal("CustomSkinAPI", list[1].Value<string>("type"));
+        Assert.Equal("https://skin.example.com/csl/", list[1].Value<string>("root"));
+        Assert.Equal("Mojang", list[2].Value<string>("name"));
+    }
+
+    [Fact]
+    public void EnsureSiteSourceFirst_NoConfig_WritesExtraList()
+    {
+        var applied = LocalSkinSetup.EnsureSiteSourceFirst(_instance, "https://skin.example.com/api/yggdrasil");
+
+        Assert.True(applied);
+        var extra = Path.Combine(_instance, "CustomSkinLoader", "ExtraList", "FuseSkinSite.json");
+        Assert.True(File.Exists(extra));
+        var src = JObject.Parse(File.ReadAllText(extra));
+        Assert.Equal("CustomSkinAPI", src.Value<string>("type"));
+        Assert.Equal("https://skin.example.com/csl/", src.Value<string>("root"));
+        // 没有配置时不去猜 CSL 的完整结构
+        Assert.False(File.Exists(Path.Combine(_instance, "CustomSkinLoader", "CustomSkinLoader.json")));
+    }
+
+    [Fact]
+    public void EnsureSiteSourceFirst_AlreadyFirst_NoDuplicate()
+    {
+        WriteConfig(_instance, """
+            [
+              {"name":"GameProfile","type":"GameProfile"},
+              {"name":"LittleSkin","type":"CustomSkinAPI","root":"https://littleskin.cn/csl/"},
+              {"name":"Mojang","type":"MojangAPI"}
+            ]
+            """);
+
+        LocalSkinSetup.EnsureSiteSourceFirst(_instance, "https://littleskin.cn/api/yggdrasil");
+
+        Assert.Single(EntryTypes(), t => t == "CustomSkinAPI");
+        Assert.Equal(new[] { "GameProfile", "CustomSkinAPI", "MojangAPI" }, EntryTypes());
+    }
+
+    [Fact]
+    public void EnsureSiteSourceFirst_NoApiRoot_NoOp()
+    {
+        WriteConfig(_instance, DefaultList());
+
+        Assert.False(LocalSkinSetup.EnsureSiteSourceFirst(_instance, ""));
+        Assert.False(LocalSkinSetup.EnsureSiteSourceFirst(_instance, null));
+        Assert.Equal(new[] { "GameProfile", "MojangAPI", "CustomSkinAPI", "Legacy" }, EntryTypes());
+    }
+
+    [Fact]
+    public void EnsureSiteSourceFirst_BrokenConfig_FallsBackToExtraList()
+    {
+        var dir = Path.Combine(_instance, "CustomSkinLoader");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "CustomSkinLoader.json"), "{ not json");
+
+        Assert.True(LocalSkinSetup.EnsureSiteSourceFirst(_instance, "https://littleskin.cn/api/yggdrasil"));
+        Assert.True(File.Exists(Path.Combine(dir, "ExtraList", "FuseSkinSite.json")));
+    }
+
+    // ---------- 恢复 CSL / 清理条目 ----------
 
     [Fact]
     public void RestoreForExternal_MovesJarBack_AndCleansInvalidEntries()
     {
-        var csl = MakeModsJar("CustomSkinLoader_Universal-15.1.jar");
-        LocalSkinSetup.SuspendForExternal(_instance);
+        var jar = MakeModsJar("CustomSkinLoader_Universal-15.1.jar");
+        StashCsl("CustomSkinLoader_Universal-15.1.jar");
         WriteConfig(_instance,
-            """[{"type":"Mojang"},{"type":"LocalSkin"},{"type":"Legacy","skin":"LocalSkin/skins/x.png"}]""");
+            """[{"type":"MojangAPI"},{"type":"LocalSkin"},{"type":"Legacy","skin":"LocalSkin/skins/x.png"}]""");
         Directory.CreateDirectory(Path.Combine(_instance, "CustomSkinLoader", "ProfileCache"));
 
         LocalSkinSetup.RestoreForExternal(_instance);
 
         // jar 回到 mods,stash 清空
-        Assert.True(File.Exists(csl));
+        Assert.True(File.Exists(jar));
         Assert.False(Directory.Exists(Path.Combine(_instance, "disabled-mods")));
         // 失效 LocalSkin 条目被就地清除,其余源(Mojang/Legacy)保留
-        var cleaned = Newtonsoft.Json.Linq.JObject.Parse(
-            File.ReadAllText(Path.Combine(_instance, "CustomSkinLoader", "CustomSkinLoader.json")));
-        var types = cleaned["loadlist"]!.OfType<Newtonsoft.Json.Linq.JObject>()
-            .Select(o => o.Value<string>("type")).ToList();
+        var types = EntryTypes();
         Assert.DoesNotContain("LocalSkin", types);
-        Assert.Contains("Mojang", types);
+        Assert.Contains("MojangAPI", types);
         Assert.Contains("Legacy", types);
         // 皮肤缓存一并清理
         Assert.False(Directory.Exists(Path.Combine(_instance, "CustomSkinLoader", "ProfileCache")));
@@ -78,16 +194,16 @@ public class LocalSkinSetupTests : IDisposable
     [Fact]
     public void RestoreForExternal_KeepsNormalConfig()
     {
-        var csl = MakeModsJar("CustomSkinLoader_Universal-15.1.jar");
-        LocalSkinSetup.SuspendForExternal(_instance);
+        var jar = MakeModsJar("CustomSkinLoader_Universal-15.1.jar");
+        StashCsl("CustomSkinLoader_Universal-15.1.jar");
         WriteConfig(_instance,
-            """[{"type":"Mojang"},{"type":"Legacy","skin":"LocalSkin/skins/x.png"}]""");
+            """[{"type":"MojangAPI"},{"type":"Legacy","skin":"LocalSkin/skins/x.png"}]""");
 
         LocalSkinSetup.RestoreForExternal(_instance);
 
         // 配置没有失效条目:保留(CSL 按 Mojang → Legacy 顺序加载)
         Assert.True(File.Exists(Path.Combine(_instance, "CustomSkinLoader", "CustomSkinLoader.json")));
-        Assert.True(File.Exists(csl));
+        Assert.True(File.Exists(jar));
     }
 
     [Fact]

@@ -998,9 +998,10 @@ public static class AppServices
     }
 
     /// <summary>
-    /// 启动前的皮肤准备:来源跟账号类型走,互斥(方案 A 三分法)。
-    /// 外置(皮肤站)账号 → 停用 CSL,皮肤/披风由 authlib-injector 从站点取;
-    /// 正版(MSA)账号 → 停用 CSL,游戏用真会话令牌原生拉取 Mojang 官方皮肤/披风;
+    /// 启动前的皮肤准备:来源跟账号类型走(方案 A 三分法)。
+    /// 外置(皮肤站)账号 → 保留 CSL,站点源排到 Mojang 之前(authlib-injector 只改
+    ///   客户端自己的 profile,离线服服务端下发的 profile 不带 textures);
+    /// 正版(MSA)账号 → 保留 CSL,官方皮肤由 Mojang 源提供;
     /// 离线账号 → 恢复 CSL 并铺好本地皮肤(所有离线账号共用 skins\local)。
     /// 失败只记日志,不拦截启动。
     /// </summary>
@@ -1015,8 +1016,11 @@ public static class AppServices
 
             if (account.ActiveType == "external")
             {
-                // 皮肤站外置:authlib-injector 直供皮肤,CSL 的默认源会按名拉错身份,保持停用
-                Core.Installer.LocalSkinSetup.SuspendForExternal(instanceDir);
+                var ok = await Core.Installer.LocalSkinSetup.PrepareForSkinSiteAsync(
+                    Http, versionId, versionsRoot, instanceDir,
+                    account.ExtApiRoot, System.Threading.CancellationToken.None).ConfigureAwait(false);
+                WidgetWindow.Boot("[skin] external: csl=" + (ok ? "ready" : "skipped")
+                    + " site=" + (account.ExtApiRoot ?? "-") + " instance=" + instanceDir);
                 return;
             }
             if (account.ActiveType == "msa")
@@ -1024,19 +1028,23 @@ public static class AppServices
                 // 正版:保留 CSL(对齐 HMCL/PCL2——离线服里其他玩家的皮肤靠它按名解析),
                 // 只清掉失效的本地皮肤条目,官方皮肤不受影响(2026-11-14 用户确认的对齐方案)
                 Core.Installer.LocalSkinSetup.RestoreForExternal(instanceDir);
+                WidgetWindow.Boot("[skin] msa: csl kept, instance=" + instanceDir);
                 return;
             }
 
             // 之前按外置/正版账号启动过就恢复 CSL,否则本地皮肤铺上了也不会生效
             Core.Installer.LocalSkinSetup.RestoreForLocal(instanceDir);
 
-            await Core.Installer.LocalSkinSetup.EnsureAsync(
+            var localOk = await Core.Installer.LocalSkinSetup.EnsureAsync(
                 Http, versionId, versionsRoot, instanceDir,
                 System.IO.Path.Combine(InstallDirectory, "skins", "local"),
                 account.OfflinePlayerName, System.Threading.CancellationToken.None).ConfigureAwait(false);
+            WidgetWindow.Boot("[skin] offline: local=" + (localOk ? "ready" : "skipped")
+                + " instance=" + instanceDir);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            WidgetWindow.Boot("[skin] prepare failed: " + ex.GetType().Name + " " + ex.Message);
         }
     }
 

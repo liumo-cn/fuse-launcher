@@ -8,17 +8,17 @@ using System.Threading.Tasks;
 using Fuse.Core.Download;
 using Fuse.Core.Sources;
 using Fuse.Core.Versioning;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace Fuse.Core.Installer;
 
 /// <summary>
-/// 离线/正版账号的"本地皮肤"落地(M5):
-///   ① 确认实例加载器(fabric/forge/neoforge)与 MC 版本
-///   ② 缺 CustomSkinLoader 就从 Modrinth 下载进 mods
-///   ③ 生成 config/CustomSkinLoader.json,皮肤源指向本地 skins\local
-///   ④ 把 skin.png / cape.png 复制成 CSL 的 LocalSkin 目录布局
-/// 任何一步失败都返回 false(调用方只提示,不拦截启动 —— 用户要求"跳过并提示")。
+/// CustomSkinLoader(CSL)的启动前落地,按账号类型分三条:
+///   离线 → 下载 CSL、铺 LocalSkin 本地文件;
+///   正版(MSA) → 保留 CSL,Mojang 源供官方皮肤;
+///   皮肤站外置 → 保留 CSL,站点源排到 Mojang 之前。
+/// 任何一步失败都只返回 false(调用方只提示,不拦截启动 —— 用户要求"跳过并提示")。
 /// </summary>
 public static class LocalSkinSetup
 {
@@ -111,71 +111,181 @@ public static class LocalSkinSetup
     private const string SuspendedDirName = "disabled-mods";
 
     /// <summary>
-    /// 皮肤站外置账号:停用 CSL —— authlib-injector 已把认证/皮肤请求劫持到皮肤站,
-    /// 皮肤由站点直供;CSL 的默认源(Mojang/LittleSkin)会按玩家名拉到错误身份的皮肤。
+    /// 皮肤站外置账号:恢复 CSL 并让站点源优先。
+    ///
+    /// 旧实现把 CSL 挪进 disabled-mods,只留 authlib-injector —— 它只能改客户端自己的
+    /// profile;离线服的服务端会按名字重新下发不带 textures 的 profile,客户端 profile
+    /// 被覆盖后就只剩默认皮肤(单人正常、进服没皮肤的根因)。
+    /// 现在和正版一样保留 CSL;站点源排到 Mojang 之前,避免同名玩家被解析成官方皮肤。
     /// </summary>
-    public static void SuspendForExternal(string instanceDir)
+    public static async Task<bool> PrepareForSkinSiteAsync(
+        HttpClient http, string versionId, string versionsRoot, string instanceDir,
+        string? apiRoot, CancellationToken ct)
     {
         try
         {
-            var modsDir = Path.Combine(instanceDir, "mods");
-            if (!Directory.Exists(modsDir)) return;
+            RestoreForLocal(instanceDir);   // 旧版本停用过 CSL 的先放回 mods
 
-            var stash = Path.Combine(instanceDir, SuspendedDirName);
-            foreach (var jar in Directory.GetFiles(modsDir, "*.jar", SearchOption.TopDirectoryOnly))
-            {
-                if (Path.GetFileName(jar).IndexOf("CustomSkinLoader", StringComparison.OrdinalIgnoreCase) < 0) continue;
-                try
-                {
-                    Directory.CreateDirectory(stash);
-                    var target = Path.Combine(stash, Path.GetFileName(jar));
-                    File.Copy(jar, target, overwrite: true);
-                    File.Delete(jar);
-                }
-                catch (Exception)
-                {
-                    // 游戏正在跑锁住了 jar:这次保持原样,下次启动会再尝试
-                }
-            }
+            var version = VersionJsonLoader.Load(versionsRoot, versionId);
+            var mc = string.IsNullOrEmpty(version.Jar) ? versionId : version.Jar!;
+            var loader = DetectLoader(version);
+            if (loader == null) return false;   // 原版装不了模组,只能靠站点直供
 
-            // CSL 关掉了,缓存也别留着,免得切回本地账号时读到外置期间的结果
-            ClearCaches(instanceDir);
+            await EnsureCustomSkinLoaderAsync(http, mc, loader, Path.Combine(instanceDir, "mods"), ct)
+                .ConfigureAwait(false);
+
+            if (CleanInvalidSources(instanceDir)) ClearCaches(instanceDir);
+            EnsureSiteSourceFirst(instanceDir, apiRoot);
+            return true;
         }
         catch (Exception)
         {
+            return false;   // 失败只记日志,不拦截启动
+        }
+    }
+
+    /// <summary>
+    /// 把皮肤站源排到 CSL 加载列表最前(只排在 GameProfile 之后)。
+    /// 配置存在就就地改;不存在或解析失败时退回 ExtraList —— CSL 14.4+ 会把它
+    /// 前置到列表顶端并自行删除,不依赖我们猜它的完整配置结构。
+    /// </summary>
+    public static bool EnsureSiteSourceFirst(string instanceDir, string? apiRoot)
+    {
+        var source = BuildSiteSource(apiRoot);
+        if (source == null) return false;
+        try
+        {
+            var cfgPath = Path.Combine(instanceDir, "CustomSkinLoader", "CustomSkinLoader.json");
+            // null = 没有配置或解析失败,交给 ExtraList;false = 已经在正确位置
+            var applied = File.Exists(cfgPath) ? ApplySourceFirst(cfgPath, source) : (bool?)null;
+            if (applied == null) WriteExtraList(instanceDir, source);
+            if (applied != false) ClearCaches(instanceDir);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
     /// <summary>
     /// 正版(MSA)账号:保留 CSL(2026-11-14 对齐市面启动器)。
-    /// 旧设计把 CSL 停用,理由是"正版有官方源不需要"——但离线服服务端不转发正版
-    /// 玩家 profile,服务器里其他玩家的皮肤全靠每个客户端的 CSL 按名字解析;
-    /// 正版玩家自己的皮肤若在皮肤站上也一样需要 CSL。HMCL/PCL2 都不会动用户的皮肤模组。
-    /// 只需把之前被停用的 CSL 放回 mods,并清掉 CSL 配置里失效的本地皮肤条目,
-    /// 让 CSL 按默认源(Mojang → LittleSkin → …)按名字加载。
+    /// 离线服服务端不转发正版玩家 profile,服务器里其他玩家的皮肤全靠每个客户端的
+    /// CSL 按名字解析;正版玩家自己的皮肤若在皮肤站上也一样需要 CSL。
+    /// HMCL/PCL2 都不会动用户的皮肤模组,这里只把停用过的 jar 放回来并清理失效条目。
     /// </summary>
     public static void RestoreForExternal(string instanceDir)
     {
         RestoreForLocal(instanceDir);   // 停用区里只有 CSL jar,放回 mods
+        if (CleanInvalidSources(instanceDir)) ClearCaches(instanceDir);
+    }
+
+    /// <summary>清掉早期版本写坏的自定义源(CSL 只认内置类型,LocalSkin 不是其一)。</summary>
+    private static bool CleanInvalidSources(string instanceDir)
+    {
         try
         {
             var cfgPath = Path.Combine(instanceDir, "CustomSkinLoader", "CustomSkinLoader.json");
-            if (!File.Exists(cfgPath)) return;
+            if (!File.Exists(cfgPath)) return false;
             var cfg = JObject.Parse(File.ReadAllText(cfgPath));
-            var list = cfg["loadlist"] as JArray;
-            if (list == null) return;
+            if (cfg["loadlist"] is not JArray list) return false;
             var invalid = list.OfType<JObject>()
                 .Where(o => string.Equals(o.Value<string>("type"), "LocalSkin", StringComparison.OrdinalIgnoreCase))
                 .ToList();
-            if (invalid.Count == 0) return;
+            if (invalid.Count == 0) return false;
             foreach (var o in invalid) list.Remove(o);
-            File.WriteAllText(cfgPath, cfg.ToString());
-            ClearCaches(instanceDir);
+            File.WriteAllText(cfgPath, cfg.ToString(Formatting.Indented));
+            return true;
         }
         catch (Exception)
         {
-            // 配置清理失败不影响启动:CSL 下次启动会自行重建默认配置
+            // 配置损坏不影响启动:CSL 下次启动会自行重建默认配置
+            return false;
         }
+    }
+
+    /// <summary>
+    /// 改 loadlist:站点源插到 GameProfile 之后、Mojang 之前。
+    /// 返回 true=有改动,false=已经在正确位置,null=读不出 loadlist(交给 ExtraList)。
+    /// </summary>
+    private static bool? ApplySourceFirst(string cfgPath, JObject source)
+    {
+        JObject cfg;
+        try { cfg = JObject.Parse(File.ReadAllText(cfgPath)); }
+        catch (Exception) { return null; }
+        if (cfg["loadlist"] is not JArray list) return null;
+
+        var type = source.Value<string>("type") ?? "";
+        var root = NormalizeRoot(source.Value<string>("root"));
+
+        // CSL 15 的 GameProfile 源用服务端下发的 textures,必须留在最前
+        var insertAt = 0;
+        while (insertAt < list.Count
+               && string.Equals((list[insertAt] as JObject)?.Value<string>("type"), "GameProfile",
+                                StringComparison.OrdinalIgnoreCase))
+            insertAt++;
+
+        var matches = new List<int>();
+        for (var i = 0; i < list.Count; i++)
+            if (SameSource(list[i] as JObject, type, root)) matches.Add(i);
+
+        if (matches.Count == 1 && matches[0] == insertAt) return false;   // 已就位
+
+        // 默认配置里 LittleSkin 在 Mojang 之后:先删掉旧位置再前插,避免重复源
+        for (var i = matches.Count - 1; i >= 0; i--) list.RemoveAt(matches[i]);
+        list.Insert(Math.Min(insertAt, list.Count), source.DeepClone());
+
+        File.WriteAllText(cfgPath, cfg.ToString(Formatting.Indented));
+        return true;
+    }
+
+    private static bool SameSource(JObject? entry, string type, string? root)
+    {
+        if (entry == null) return false;
+        if (!string.Equals(entry.Value<string>("type"), type, StringComparison.OrdinalIgnoreCase)) return false;
+        return string.Equals(NormalizeRoot(entry.Value<string>("root")), root, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? NormalizeRoot(string? root)
+        => string.IsNullOrWhiteSpace(root) ? null : root!.Trim().TrimEnd('/') + "/";
+
+    /// <summary>
+    /// 从 authlib-injector 的 apiRoot 推出 CSL 源。
+    /// LittleSkin 用内置源;其它站点按 Blessing Skin 约定取 <站点根>/csl/。
+    /// </summary>
+    private static JObject? BuildSiteSource(string? apiRoot)
+    {
+        if (string.IsNullOrWhiteSpace(apiRoot)) return null;
+        var raw = apiRoot!.Trim();
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri)) return null;
+        if (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp) return null;
+
+        if (uri.Host.IndexOf("littleskin", StringComparison.OrdinalIgnoreCase) >= 0)
+            return new JObject
+            {
+                ["name"] = "LittleSkin",
+                ["type"] = "CustomSkinAPI",
+                ["root"] = "https://littleskin.cn/csl/",
+            };
+
+        var site = raw.TrimEnd('/');
+        const string yggdrasilSuffix = "/api/yggdrasil";
+        if (site.EndsWith(yggdrasilSuffix, StringComparison.OrdinalIgnoreCase))
+            site = site.Substring(0, site.Length - yggdrasilSuffix.Length);
+        return new JObject
+        {
+            ["name"] = uri.Host,
+            ["type"] = "CustomSkinAPI",
+            ["root"] = site.TrimEnd('/') + "/csl/",
+        };
+    }
+
+    /// <summary>一次性导入文件:CSL 14.4+ 启动时会把它插到加载列表顶端并删除。</summary>
+    private static void WriteExtraList(string instanceDir, JObject source)
+    {
+        var dir = Path.Combine(instanceDir, "CustomSkinLoader", "ExtraList");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "FuseSkinSite.json"), source.ToString(Formatting.Indented));
     }
 
     /// <summary>本地/离线账号:把之前挪走的 CSL 放回 mods(换回本地皮肤前先恢复)。</summary>
