@@ -13,6 +13,16 @@
     <!-- 背景 alpha=1:肉眼不可见,但阻止分层窗口的逐像素点击穿透(半距离收回的根因) -->
     <Grid x:Name="SafeArea" Background="#01000000"
           Width="240" Height="240" HorizontalAlignment="Center" VerticalAlignment="Center">
+      <!-- 圆面 + 120px 辉光:启动时预渲染成位图(GlowCache),呼吸/脉冲只换模糊档位。
+           必须放在 SafeArea 这一层:80px 的大圆 Grid 会把超出的位图裁成方形 -->
+      <Grid x:Name="OrbGlowWrap" Width="500" Height="500"
+            HorizontalAlignment="Left" VerticalAlignment="Top" Margin="-112,-112,0,0"
+            IsHitTestVisible="False">
+        <Image x:Name="OrbBody" Stretch="None"
+               HorizontalAlignment="Center" VerticalAlignment="Center"
+               IsHitTestVisible="False"
+               RenderOptions.BitmapScalingMode="HighQuality"/>
+      </Grid>
       <!-- 五花瓣:叠于大圆中心(初始藏于背后),展开时沿圆弧飞出成正五边形槽位。
            Margin 101 = 圆心 138 - 花瓣半宽 37,保证五瓣的飞行圆心与大圆圆心重合 -->
       <Button x:Name="PetalLogin" Style="{StaticResource PetalButton}" Content="登录"
@@ -38,11 +48,6 @@
             Cursor="Hand" MouseLeftButtonDown="Orb_MouseLeftButtonDown"
             MouseMove="Orb_MouseMove"
             MouseLeftButtonUp="Orb_MouseLeftButtonUp" MouseLeave="Orb_MouseLeave">
-      <!-- 圆面 + 120px 辉光:启动时预渲染成位图(GlowCache),呼吸/脉冲只换模糊档位 -->
-      <Image x:Name="OrbBody" Width="500" Height="500" Stretch="Fill"
-             HorizontalAlignment="Center" VerticalAlignment="Center"
-             IsHitTestVisible="False"
-             RenderOptions.BitmapScalingMode="HighQuality"/>
       <Ellipse Margin="3">
         <Ellipse.Fill>
           <RadialGradientBrush GradientOrigin="0.32,0.28">

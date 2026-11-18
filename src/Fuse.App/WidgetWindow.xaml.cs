@@ -66,6 +66,8 @@ public partial class WidgetWindow : Window
     private double _pulseFromScale = 1;
     private ScaleTransform? _orbScale;
     private TranslateTransform? _orbShift;
+    private ScaleTransform? _orbBodyScale;
+    private TranslateTransform? _orbBodyShift;
     /// <summary>当前显示的光晕档位(索引,避免重复改 Source)。</summary>
     private int _glowFrame = -1;
     private DateTime _lastGlowAt = DateTime.MinValue;
@@ -137,6 +139,14 @@ public partial class WidgetWindow : Window
         orbFx.Children.Add(_orbScale);
         orbFx.Children.Add(_orbShift);
         Orb.RenderTransform = orbFx;
+
+        // 预渲染光晕在大圆 Grid 之外(SafeArea 里),呼吸/脉冲的缩放平移要同步镜像过去
+        _orbBodyScale = new ScaleTransform(1, 1, 250, 250);
+        _orbBodyShift = new TranslateTransform();
+        var bodyFx = new TransformGroup();
+        bodyFx.Children.Add(_orbBodyScale);
+        bodyFx.Children.Add(_orbBodyShift);
+        OrbGlowWrap.RenderTransform = bodyFx;
         _fxTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
         _fxTimer.Tick += (_, _) => FxTick();
 
@@ -424,11 +434,13 @@ public partial class WidgetWindow : Window
                     var k = 1 - (1 - t / ShrinkMs) * (1 - t / ShrinkMs);
                     ApplyOrb(_pulseFromScale + (0.88 - _pulseFromScale) * k, 0);
                     Orb.Opacity = 1;
+                    OrbGlowWrap.Opacity = 1;
                 }
                 else if (t < ShrinkMs + HoldMs)
                 {
                     ApplyOrb(0.88, 0);
                     Orb.Opacity = 1 - 0.45 * ((t - ShrinkMs) / HoldMs);   // 变暗
+                    OrbGlowWrap.Opacity = Orb.Opacity;
                 }
                 else
                 {
@@ -436,6 +448,7 @@ public partial class WidgetWindow : Window
                     var e = x * x * (3 - 2 * x);
                     ApplyOrb(0.88 + 0.12 * e, 0);
                     Orb.Opacity = 0.55 + 0.45 * e;
+                    OrbGlowWrap.Opacity = Orb.Opacity;
                     if (x >= 1) { FinishFx(); break; }
                 }
                 if (t > 1200) FinishFx();   // 兜底
@@ -452,18 +465,29 @@ public partial class WidgetWindow : Window
             _orbScale.ScaleX = scale;
             _orbScale.ScaleY = scale;
         }
+        if (_orbBodyScale != null)
+        {
+            _orbBodyScale.ScaleX = scale;
+            _orbBodyScale.ScaleY = scale;
+        }
         if (_orbShift != null)
         {
             if (jitter <= 0 || _dragging)
             {
                 _orbShift.X = 0;
                 _orbShift.Y = 0;
+                if (_orbBodyShift != null) { _orbBodyShift.X = 0; _orbBodyShift.Y = 0; }
             }
             else
             {
                 var j = 2.5 * jitter;
                 _orbShift.X = (_floatRnd.NextDouble() * 2 - 1) * j;
                 _orbShift.Y = (_floatRnd.NextDouble() * 2 - 1) * j;
+                if (_orbBodyShift != null)
+                {
+                    _orbBodyShift.X = _orbShift.X;
+                    _orbBodyShift.Y = _orbShift.Y;
+                }
             }
         }
     }
@@ -502,6 +526,7 @@ public partial class WidgetWindow : Window
         _fxState = LaunchFxState.Idle;
         ApplyOrb(1, 0);
         Orb.Opacity = 1;
+        OrbGlowWrap.Opacity = 1;
         OrbFlash.Opacity = 0;
         // 回到静息档光晕
         _glowFrame = 0;
