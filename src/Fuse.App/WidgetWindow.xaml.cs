@@ -66,9 +66,13 @@ public partial class WidgetWindow : Window
     private double _pulseFromScale = 1;
     private ScaleTransform? _orbScale;
     private TranslateTransform? _orbShift;
-    private System.Windows.Media.Effects.DropShadowEffect? _glowClone;
+    /// <summary>当前显示的光晕档位(索引,避免重复改 Source)。</summary>
+    private int _glowFrame = -1;
+    private DateTime _lastGlowAt = DateTime.MinValue;
     /// <summary>星光动画的作用目标(大圆盘 + 各花瓣光晕盘),不可见暂停时按此定格。</summary>
     private readonly List<System.Windows.UIElement> _twinkleTargets = new();
+    /// <summary>只属于花瓣的星光/漂浮:花瓣收起时停掉,大圆的星光保留。</summary>
+    private readonly List<System.Windows.UIElement> _petalTwinkleTargets = new();
     private Ellipse? _fxFlash;
 
     // ---- 圆弧动画参数(FR-12) ----
@@ -158,6 +162,7 @@ public partial class WidgetWindow : Window
                 if (!_iconStarted) { _iconStarted = true; SetupPetalIcons(); }
                 if (!_floatStarted) { _floatStarted = true; SetupPetalFloat(); }
                 _hoverTimer.Start();
+                LogPerformance();
             }),
             System.Windows.Threading.DispatcherPriority.Background);
 
@@ -281,7 +286,6 @@ public partial class WidgetWindow : Window
             _wobblePhase = 0;
             _fxState = LaunchFxState.Breathing;
             _fxPhaseStart = DateTime.Now;
-            EnsureGlowClone();
             if (!_fxTimer.IsEnabled) _fxTimer.Start();
             Boot("[fx] breathing");
         }));
@@ -324,13 +328,21 @@ public partial class WidgetWindow : Window
         }));
     }
 
-    private void EnsureGlowClone()
+    /// <summary>
+    /// 切换预渲染光晕档位(最多 30fps):呼吸/脉冲只改位图选择,不再每帧重跑 120px 模糊。
+    /// 低特效模式下固定静息档,只保留缩放和亮度变化。
+    /// </summary>
+    private void ApplyGlowFrame(double blurRadius)
     {
-        if (_glowClone != null) return;
-        // Resources 里的 Freezable 是冻结的,不能直接动画;克隆一份挂到圆盘上用完即弃
-        if (TryFindResource("OrbGlow") is System.Windows.Media.Effects.DropShadowEffect baseFx)
-            _glowClone = baseFx.Clone();
-        OrbDisc.Effect = _glowClone;
+        if (Performance.LowEffects) blurRadius = GlowCache.FrameRadii[0];
+        if ((DateTime.Now - _lastGlowAt).TotalMilliseconds < 33) return;
+        var index = GlowCache.IndexFor(blurRadius);
+        if (index == _glowFrame) return;
+        var frame = GlowCache.FrameAt(index);
+        if (frame == null) return;   // 后台烘焙还没好,保持当前档位
+        _glowFrame = index;
+        OrbBody.Source = frame;
+        _lastGlowAt = DateTime.Now;
     }
 
     /// <summary>特效每帧:一个计时器驱动所有状态(OrbExplosion.cs 的技术)。</summary>
@@ -348,13 +360,9 @@ public partial class WidgetWindow : Window
                 var wob = Math.Sin(_wobblePhase);
                 ApplyOrb(1 + amp * wob, jitter: p > 0.75 ? (p - 0.75) / 0.25 : 0);
 
-                // 辉光随波动增强(克隆的 Effect 不受冻结限制)
+                // 辉光随波动增强:换成对应模糊档位(30fps 上限),不再逐帧改 BlurRadius
                 var boost = 2.0 * p * p + 0.5 * Math.Max(0, wob) * p;
-                if (_glowClone != null)
-                {
-                    _glowClone.Opacity = Math.Min(1, 0.9 + 0.10 * boost);
-                    _glowClone.BlurRadius = 120 * (1 + 0.12 * boost);
-                }
+                ApplyGlowFrame(120 * (1 + 0.12 * boost));
 
                 break;
             }
@@ -395,11 +403,7 @@ public partial class WidgetWindow : Window
                 }
 
                 // 光晕同步 flare:同一把攻击曲线,略慢回落
-                if (_glowClone != null)
-                {
-                    _glowClone.Opacity = 0.9 + 0.1 * level;
-                    _glowClone.BlurRadius = 120 + 90 * level;
-                }
+                ApplyGlowFrame(120 + 90 * level);
 
                 // 爆闪播完(白闪已淡出、亮度仍在线)后收进托盘,所有面板一起关掉
                 if (hideOnLaunch && t >= HideAfterLaunchMs)
@@ -499,9 +503,10 @@ public partial class WidgetWindow : Window
         ApplyOrb(1, 0);
         Orb.Opacity = 1;
         OrbFlash.Opacity = 0;
-        // 恢复主题光晕(克隆件用完即弃)
-        OrbDisc.SetResourceReference(System.Windows.UIElement.EffectProperty, "OrbGlow");
-        _glowClone = null;
+        // 回到静息档光晕
+        _glowFrame = 0;
+        OrbBody.Source = GlowCache.FrameAt(0);
+        _lastGlowAt = DateTime.MinValue;
         FxLayer.Children.Clear();
         _fxFlash = null;
         Boot("[fx] idle");
@@ -564,7 +569,12 @@ public partial class WidgetWindow : Window
             // 渲染失败时保持素圆面,不影响启动功能
         }
 
-        // 主题换色会重建 OrbGlow(新的 Effect 实例),星光动画要重新挂上
+        // 主题换色会重烘光晕:换回新的静息档,并重挂星光
+        _glowFrame = 0;
+        OrbBody.Source = GlowCache.FrameAt(0);
+        _lastGlowAt = DateTime.MinValue;
+
+        // 星光动画挂在预渲染图上,换帧后重新挂一次即可
         if (IsLoaded) StartTwinkle();
     }
 
@@ -641,7 +651,8 @@ public partial class WidgetWindow : Window
                 var offset = new TranslateTransform(0, 0);
                 group.Children.Add(offset);
                 _floatOffsets[i] = offset;
-                StartPetalFloat(i, 0, 0);
+                // 收起状态下花瓣缩放到 0,不需要漂浮;低特效也不跑
+                if (_petalsOpen && !Performance.LowEffects) StartPetalFloat(i, 0, 0);
 
                 petal.MouseEnter += (_, _) =>
                 {
@@ -684,6 +695,7 @@ public partial class WidgetWindow : Window
             Duration = duration,
             RepeatBehavior = RepeatBehavior.Forever,
         };
+        Timeline.SetDesiredFrameRate(anim, 30);   // 3~6 秒的慢漂浮,30fps 看不出差别
         var seconds = duration.TotalSeconds;
         anim.KeyFrames.Add(new LinearDoubleKeyFrame(from, TimeSpan.Zero));
         for (var k = 1; k <= 3; k++)
@@ -721,7 +733,7 @@ public partial class WidgetWindow : Window
             {
                 FreezePetalFloat(index);
             }
-            else
+            else if (!Performance.LowEffects && _petalsOpen)
             {
                 var offset = _floatOffsets[index];
                 StartPetalFloat(index, offset?.X ?? 0, offset?.Y ?? 0);
@@ -747,36 +759,40 @@ public partial class WidgetWindow : Window
     /// <summary>
     /// 星光:圆面亮度做正弦往复,五个圆各自错开相位,像星星各自明灭。
     ///
-    /// 注意:动画的必须是**元素自身**的 Opacity,不能动 OrbGlow/PetalGlow——
-    /// 它们放在 Application.Resources 里,WPF 会把 Freezable 冻结,对它 BeginAnimation 会抛
-    /// "该对象已密封或已冻结"。元素透明度变化时其 Effect 也会跟着变淡,观感一致。
+    /// 注意:星光动画作用在预渲染的光晕图上,不要再给图挂 Effect——那会把模糊重新拉回每帧路径。
     /// </summary>
     private void StartTwinkle()
     {
         try
         {
             _twinkleTargets.Clear();
-            var orbDisc = Orb.Children.OfType<System.Windows.Shapes.Ellipse>().FirstOrDefault();
-            if (orbDisc != null)
+            _petalTwinkleTargets.Clear();
+
+            if (Performance.LowEffects)
             {
-                orbDisc.BeginAnimation(OpacityProperty, Twinkle(0.80, 1.0, TimeSpan.Zero));
-                _twinkleTargets.Add(orbDisc);
+                OrbBody.BeginAnimation(OpacityProperty, null);
+                OrbBody.Opacity = 0.9;
+                foreach (var petal in Petals())
+                    if (TemplateChild(petal, "glowPulse") is System.Windows.UIElement glow) glow.Opacity = 1.0;
+                _twinkleStarted = true;
+                Boot("twinkle skipped (low effects)");
+                return;
             }
 
-            var petals = Petals();
-            var found = 0;
-            for (var i = 0; i < petals.Length; i++)
+            OrbBody.BeginAnimation(OpacityProperty, Twinkle(0.80, 1.0, TimeSpan.Zero));
+            _twinkleTargets.Add(OrbBody);
+
+            for (var i = 0; i < Petals().Length; i++)
             {
-                // 模板可能尚未实例化,先强制应用再遍历
-                petals[i].ApplyTemplate();
-                var disc = FindFirstEllipse(petals[i]);
-                if (disc == null) continue;
-                found++;
-                disc.BeginAnimation(OpacityProperty, Twinkle(0.28, 1.0, TimeSpan.FromMilliseconds(i * 470)));
-                _twinkleTargets.Add(disc);
+                var glow = TemplateChild(Petals()[i], "glowPulse");
+                if (glow == null) continue;
+                _petalTwinkleTargets.Add(glow);
             }
-            Boot($"twinkle started (petals {found}/{petals.Length})");
+            Boot($"twinkle started (petals {_petalTwinkleTargets.Count}/{Petals().Length})");
             _twinkleStarted = true;
+
+            // 花瓣收起时它们不可见,星光留到展开再跑
+            if (_petalsOpen) StartPetalTwinkle();
         }
         catch (Exception ex)
         {
@@ -785,15 +801,104 @@ public partial class WidgetWindow : Window
         }
     }
 
+    /// <summary>花瓣的星光只在展开时跑(收起后缩放到 0,跑了也看不见)。</summary>
+    private void StartPetalTwinkle()
+    {
+        if (Performance.LowEffects || !_petalsOpen) return;
+        for (var i = 0; i < _petalTwinkleTargets.Count; i++)
+            _petalTwinkleTargets[i].BeginAnimation(
+                OpacityProperty, Twinkle(0.28, 1.0, TimeSpan.FromMilliseconds(i * 470)));
+    }
+
+    private void StopPetalTwinkle()
+    {
+        foreach (var glow in _petalTwinkleTargets)
+        {
+            var held = glow.Opacity;
+            glow.BeginAnimation(OpacityProperty, null);
+            glow.Opacity = held > 0 ? held : 1.0;
+        }
+    }
+
+    private static System.Windows.UIElement? TemplateChild(Button button, string name)
+    {
+        button.ApplyTemplate();
+        return button.Template?.FindName(name, button) as System.Windows.UIElement;
+    }
+
+    /// <summary>设置页切换低特效后立即生效:停掉/恢复星光与漂浮,光晕回到静息档。</summary>
+    public void ApplyPerformanceMode()
+    {
+        try
+        {
+            if (Performance.LowEffects) PauseIdleAnimations(stopHoverTimer: false);
+            else
+            {
+                _decorPaused = false;
+                _cursorLastNearAt = DateTime.Now;
+                ResumeIdleAnimations();
+            }
+
+            if (Performance.LowEffects)
+            {
+                OrbBody.BeginAnimation(OpacityProperty, null);
+                OrbBody.Opacity = 0.9;
+                _glowFrame = 0;
+                OrbBody.Source = GlowCache.FrameAt(0);
+                foreach (var glow in _petalTwinkleTargets)
+                {
+                    glow.BeginAnimation(OpacityProperty, null);
+                    glow.Opacity = 1.0;
+                }
+            }
+            Boot("[perf] low effects=" + Performance.LowEffects);
+        }
+        catch (Exception)
+        {
+            // 装饰开关失败不影响使用
+        }
+    }
+
+    /// <summary>
+    /// 记录渲染档位/DPI/远程会话与 2 秒空闲帧率。支持远程排查:
+    /// tier&lt;2 或远程会话就是"所有 WPF 动画一起卡"的典型环境。
+    /// </summary>
+    private void LogPerformance()
+    {
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this);
+            Boot($"[perf] tier={Performance.Tier} dpi={dpi.DpiScaleX:0.##} "
+                 + $"remote={Performance.RemoteSession} low={Performance.LowEffects}");
+
+            var frames = 0;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            EventHandler onRendering = (_, _) => frames++;
+            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2.2) };
+            CompositionTarget.Rendering += onRendering;
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                CompositionTarget.Rendering -= onRendering;
+                var fps = frames / Math.Max(0.1, sw.Elapsed.TotalSeconds);
+                Boot($"[perf] frames={frames} in {sw.Elapsed.TotalSeconds:0.0}s ({fps:0.#} fps)");
+            };
+            timer.Start();
+        }
+        catch (Exception)
+        {
+        }
+    }
+
     /// <summary>暂停装饰动画:漂浮定格在当前偏移、星光定格在当前亮度。stopHoverTimer=false 时悬停计时器继续走(无交互暂停靠它唤醒)。</summary>
     private void PauseIdleAnimations(bool stopHoverTimer = true)
     {
         try
         {
-            if (_floatStarted)
+            if (_floatStarted && _petalsOpen)
                 for (var i = 0; i < _floatOffsets.Length; i++)
                     FreezePetalFloat(i);
-            foreach (var el in _twinkleTargets)
+            foreach (var el in _twinkleTargets.Concat(_petalTwinkleTargets))
             {
                 var held = el.Opacity;                       // 动画驱动的当前值
                 el.BeginAnimation(OpacityProperty, null);    // 摘掉动画(会弹回基准值)
@@ -813,7 +918,7 @@ public partial class WidgetWindow : Window
         try
         {
             if (_twinkleStarted) StartTwinkle();
-            if (_floatStarted)
+            if (_floatStarted && _petalsOpen && !Performance.LowEffects)
                 for (var i = 0; i < _floatOffsets.Length; i++)
                 {
                     var off = _floatOffsets[i];
@@ -829,27 +934,16 @@ public partial class WidgetWindow : Window
 
     private static DoubleAnimation Twinkle(double from, double to, TimeSpan begin)
     {
-        return new DoubleAnimation(from, to, TimeSpan.FromSeconds(1.9))
+        var anim = new DoubleAnimation(from, to, TimeSpan.FromSeconds(1.9))
         {
             AutoReverse = true,
             RepeatBehavior = RepeatBehavior.Forever,
             BeginTime = begin,
             EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
         };
-    }
-
-    /// <summary>在可视化树里找第一个椭圆(花瓣模板中的光晕盘)。</summary>
-    private static System.Windows.Shapes.Ellipse? FindFirstEllipse(DependencyObject root)
-    {
-        var count = VisualTreeHelper.GetChildrenCount(root);
-        for (var i = 0; i < count; i++)
-        {
-            var child = VisualTreeHelper.GetChild(root, i);
-            if (child is System.Windows.Shapes.Ellipse ellipse) return ellipse;
-            var nested = FindFirstEllipse(child);
-            if (nested != null) return nested;
-        }
-        return null;
+        // 慢速正弦 30fps 足够,分层窗口每帧的呈现成本直接减半
+        Timeline.SetDesiredFrameRate(anim, 30);
+        return anim;
     }
 
     private void ApplySavedPosition()
@@ -877,6 +971,10 @@ public partial class WidgetWindow : Window
         _petalsOpen = true;
         Boot("OpenPetals");
         AnimatePetals(open: true);
+        StartPetalTwinkle();
+        if (_floatStarted && !Performance.LowEffects)
+            for (var i = 0; i < _floatOffsets.Length; i++)
+                if (_floatOffsets[i] != null) StartPetalFloat(i, _floatOffsets[i]!.X, _floatOffsets[i]!.Y);
     }
 
     private void ClosePetals()
@@ -887,6 +985,11 @@ public partial class WidgetWindow : Window
         if (PanelWindow.AnyPanelOpen) return;
         Boot("ClosePetals");
         _petalsOpen = false;
+        // 收起后花瓣不可见:星光/漂浮停掉,不再每帧空转
+        StopPetalTwinkle();
+        if (_floatStarted)
+            for (var i = 0; i < _floatOffsets.Length; i++)
+                FreezePetalFloat(i);
         AnimatePetals(open: false);
     }
 

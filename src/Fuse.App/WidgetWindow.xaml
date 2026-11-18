@@ -38,7 +38,11 @@
             Cursor="Hand" MouseLeftButtonDown="Orb_MouseLeftButtonDown"
             MouseMove="Orb_MouseMove"
             MouseLeftButtonUp="Orb_MouseLeftButtonUp" MouseLeave="Orb_MouseLeave">
-      <Ellipse x:Name="OrbDisc" CacheMode="BitmapCache" Fill="{DynamicResource OrbFillBrush}" Effect="{DynamicResource OrbGlow}"/>
+      <!-- 圆面 + 120px 辉光:启动时预渲染成位图(GlowCache),呼吸/脉冲只换模糊档位 -->
+      <Image x:Name="OrbBody" Width="500" Height="500" Stretch="Fill"
+             HorizontalAlignment="Center" VerticalAlignment="Center"
+             IsHitTestVisible="False"
+             RenderOptions.BitmapScalingMode="HighQuality"/>
       <Ellipse Margin="3">
         <Ellipse.Fill>
           <RadialGradientBrush GradientOrigin="0.32,0.28">

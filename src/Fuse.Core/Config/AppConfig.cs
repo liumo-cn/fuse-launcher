@@ -72,6 +72,11 @@ public sealed class AppConfig
     public int BackgroundOpacity { get; set; } = 70;
     public int WindowOpacity { get; set; } = 100;
 
+    /// <summary>低特效模式:关掉星光/漂浮/开屏粒子,呼吸光晕不再扩散。老显卡/远程桌面下自动开一次。</summary>
+    public bool LowEffects { get; set; }
+    /// <summary>自动判定是否已经执行过(执行过就不再覆盖用户的手动选择)。</summary>
+    public bool LowEffectsAutoApplied { get; set; }
+
     public static AppConfig Load(string path)
     {
         try

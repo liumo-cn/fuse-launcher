@@ -51,7 +51,8 @@ public class SplashWindow : Window
         root.Children.Add(center);
         BuildRipple(center);
         BuildCore(center);
-        BuildParticles(center, _accent);
+        // 低特效(老显卡/远程桌面)不造 12 颗粒子:每颗都带模糊,开屏瞬间最容易卡
+        if (!Performance.LowEffects) BuildParticles(center, _accent);
 
         Content = root;
         Loaded += (_, _) => StartTimeline();
@@ -101,7 +102,10 @@ public class SplashWindow : Window
             AddKF(animO, 0, 1);
 
             var blur = (BlurEffect)particle.Effect;
-            blur.BeginAnimation(BlurEffect.RadiusProperty, BlurKeys());
+            var blurAnim = BlurKeys();
+            Timeline.SetDesiredFrameRate(blurAnim, 30);
+            blur.BeginAnimation(BlurEffect.RadiusProperty, blurAnim);
+            Timeline.SetDesiredFrameRate(animO, 30);
             particle.BeginAnimation(OpacityProperty, animO);
 
             center.Children.Add(particle);
@@ -173,6 +177,7 @@ public class SplashWindow : Window
         var scaleAnim = new DoubleAnimationUsingKeyFrames { BeginTime = TimeSpan.FromSeconds(2.0), Duration = TimeSpan.FromMilliseconds(500) };
         scaleAnim.KeyFrames.Add(new LinearDoubleKeyFrame(1, TimeSpan.Zero));
         scaleAnim.KeyFrames.Add(AddKF(2.6, 0.5, 0.5));
+        Timeline.SetDesiredFrameRate(scaleAnim, 30);
         ripple.RenderTransform.BeginAnimation(ScaleTransform.ScaleXProperty, scaleAnim);
         ripple.RenderTransform.BeginAnimation(ScaleTransform.ScaleYProperty, scaleAnim);
 
@@ -180,6 +185,7 @@ public class SplashWindow : Window
         opacityAnim.KeyFrames.Add(AddKF(0, 0, 0.5));
         opacityAnim.KeyFrames.Add(AddKF(0.5, 0.1, 0.5));
         opacityAnim.KeyFrames.Add(AddKF(0, 0.5, 0.5));
+        Timeline.SetDesiredFrameRate(opacityAnim, 30);
         ripple.BeginAnimation(OpacityProperty, opacityAnim);
     }
 
@@ -242,6 +248,7 @@ public class SplashWindow : Window
         AddKF(anim, 1.0, 0.8);
         AddKF(anim, 1.08, 0.92);
         AddKF(anim, 1.0, 1);
+        Timeline.SetDesiredFrameRate(anim, 30);
         scale.BeginAnimation(ScaleTransform.ScaleXProperty, anim);
         scale.BeginAnimation(ScaleTransform.ScaleYProperty, anim);
     }
@@ -260,6 +267,8 @@ public class SplashWindow : Window
         AddKF(anim, 6, 0.8);
         AddKF(anim, 0, 0.92);
         AddKF(anim, 0, 1);
+        // 模糊半径逐帧重算是开屏最贵的一笔,30fps 对结晶过程足够
+        Timeline.SetDesiredFrameRate(anim, 30);
         blur.BeginAnimation(BlurEffect.RadiusProperty, anim);
     }
 
@@ -277,6 +286,7 @@ public class SplashWindow : Window
         AddKF(anim, 0.55, 0.8);
         AddKF(anim, 0.7, 0.92);
         AddKF(anim, 0.45, 1);
+        Timeline.SetDesiredFrameRate(anim, 30);
         glow.BeginAnimation(OpacityProperty, anim);
     }
 
@@ -287,6 +297,7 @@ public class SplashWindow : Window
         {
             BeginTime = TimeSpan.FromSeconds(2.55),
         };
+        Timeline.SetDesiredFrameRate(fade, 30);
         fade.Completed += (_, _) =>
         {
             Close();

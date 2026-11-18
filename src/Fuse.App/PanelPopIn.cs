@@ -51,8 +51,9 @@ internal static class PanelPopIn
         var scale = new ScaleTransform(FromScale, FromScale);
         root.RenderTransform = scale;
         // 缩放期间把整页缓存成位图:文字不会逐帧重新光栅化,避免字体边缘"抽动";
-        // 动画结束立刻摘掉,恢复原生清晰渲染。
-        root.CacheMode = new BitmapCache { RenderAtScale = 1 };
+        // 缓存倍率跟随系统 DPI(固定 1x 在 150% 缩放下会先糊一下再变清晰)
+        var dpi = VisualTreeHelper.GetDpi(root);
+        root.CacheMode = new BitmapCache { RenderAtScale = Math.Max(1, dpi.DpiScaleX) };
 
         var grow = new DoubleAnimation(FromScale, 1, GrowMs)
         {

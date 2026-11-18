@@ -937,6 +937,7 @@ public static class AppServices
         Fuse.Core.Download.DownloadCache.Root = Path.Combine(Config.InstallDirectory, "cache", "objects");
         Accounts.Load();
         VersionProfiles = new VersionProfiles(ProfilesStorePath);
+        Performance.Initialize();
         ApplyTheme();
         RebuildQueue();
         Queue!.RestoreOnStartup();
@@ -1102,33 +1103,21 @@ public static class AppServices
         var res = Application.Current.Resources;
         var accent = ParseHex(Config.AccentColorHex, Color.FromRgb(0xA4, 0x16, 0xE5));
         res["GreenBrush"] = new SolidColorBrush(accent);
-        res["OrbGlow"] = new System.Windows.Media.Effects.DropShadowEffect
-        {
-            BlurRadius = 120,
-            Color = accent,
-            ShadowDepth = 0,
-            Opacity = 0.9,
-        };
         res["PetalFillBrush"] = new SolidColorBrush(Color.FromArgb(0x33, accent.R, accent.G, accent.B));
         res["PetalBorderBrush"] = new SolidColorBrush(Color.FromArgb(0x73, accent.R, accent.G, accent.B));
         res["AccentSoftBrush"] = new SolidColorBrush(Color.FromArgb(0x59, accent.R, accent.G, accent.B));
         // 圆形填充的边缘羽化:外圈 93% 之后渐隐到透明,去掉"贴了张圆片"的硬边
-        res["OrbFillBrush"] = SoftDisc(accent, 1.0, 0.86);
+        var orbFill = SoftDisc(accent, 1.0, 0.86);
+        res["OrbFillBrush"] = orbFill;
         res["PetalFillSoftBrush"] = SoftDisc(accent, 0.38, 0.55);
         // 花瓣垫底的光晕盘也必须羽化,否则它那个实心圆边会把"渐变透明"完全盖住
-        res["PetalGlowDiscBrush"] = SoftDisc(accent, 0.55, 0.0);
+        var petalGlowFill = SoftDisc(accent, 0.55, 0.0);
+        res["PetalGlowDiscBrush"] = petalGlowFill;
         // 选中态底色 = 组件高亮色的实心填充(全站统一:"当前/选中"一律是实心强调色)
-        // 更淡的提示底 / 状态与勾选文字沿用各自的不透明度(原先是写死的绿,主题换色后不跟随)
+        // 更淡的提示底 / 状态与勾选文字沿用各自的不透明度(原先写死的绿,主题换色后不跟随)
         res["AccentChipBrush"] = new SolidColorBrush(accent);
         res["AccentChipSoftBrush"] = new SolidColorBrush(Color.FromArgb(0x1A, accent.R, accent.G, accent.B));
         res["AccentTextBrush"] = new SolidColorBrush(Lighten(accent, 0.45));
-        res["PetalGlow"] = new System.Windows.Media.Effects.DropShadowEffect
-        {
-            BlurRadius = 56,
-            Color = accent,
-            ShadowDepth = 0,
-            Opacity = 0.6,
-        };
 
         // 点击通明色:未单独设置时跟随组件高亮色,保证默认观感不变
         var hover = ParseHex(Config.HoverColorHex, accent);
@@ -1142,6 +1131,10 @@ public static class AppServices
         res["PetalHoverFillBrush"] = SoftDisc(hover, 0.80, 0.30);
         res["HoverPetalBorderBrush"] = new SolidColorBrush(Color.FromArgb(0xB3, hover.R, hover.G, hover.B));
         res["HoverColor"] = hover; // Color 类型:给 DropShadowEffect.Color 用
+
+        // 光晕预渲染:分层窗口里大半径模糊每帧重算太贵,烘焙成位图后只做合成
+        GlowCache.Refresh(orbFill, petalGlowFill, accent);
+        if (GlowCache.PetalGlow != null) res["PetalGlowImage"] = GlowCache.PetalGlow;
 
         // 面板 95% 不透明(用户指定):留一点玻璃感,同时不出现整块灰底
         var bg = ParseHex(Config.PanelBgHex, Color.FromRgb(0x1E, 0x20, 0x26));

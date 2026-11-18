@@ -522,13 +522,10 @@
     </Style>
 
     <!-- 悬浮组件:花瓣小圆(56px 玻璃) -->
-    <DropShadowEffect x:Key="OrbGlow" BlurRadius="120" Color="#A416E5" ShadowDepth="0" Opacity="0.9"/>
-    <DropShadowEffect x:Key="PetalGlow" BlurRadius="56" Color="#A416E5" ShadowDepth="0" Opacity="0.6"/>
+    <!-- 光晕改为启动时预渲染的位图(GlowCache):分层窗口里 DropShadowEffect 每帧重算太贵 -->
     <SolidColorBrush x:Key="PetalFillBrush" Color="#33A416E5"/>
     <SolidColorBrush x:Key="PetalGlowDiscBrush" Color="#55A416E5"/>
     <SolidColorBrush x:Key="PetalBorderBrush" Color="#8CA416E5"/>
-    <DropShadowEffect x:Key="OrbDarkShadow" BlurRadius="32" Color="Black" ShadowDepth="10" Opacity="0.45"/>
-    <DropShadowEffect x:Key="PetalShadow" BlurRadius="32" Color="Black" ShadowDepth="8" Opacity="0.45"/>
 
     <Style x:Key="PetalButton" TargetType="Button">
       <Setter Property="Width" Value="74"/>
@@ -545,10 +542,13 @@
               <Grid.RenderTransform>
                 <ScaleTransform x:Name="petalHoverScale" ScaleX="1" ScaleY="1"/>
               </Grid.RenderTransform>
-              <!-- 光晕盘:经 PetalGlow 形成柔和外发光,垫在玻璃盘后。
-                   BitmapCache:星光(Opacity 动画)与漂浮(平移)只重合成缓存位图,
-                   不再每帧重跑 56px 半径的 DropShadow 模糊——空闲 CPU 从 ~40% 单核降到个位数 -->
-              <Ellipse CacheMode="BitmapCache" Fill="{DynamicResource PetalGlowDiscBrush}" Effect="{DynamicResource PetalGlow}"/>
+              <!-- 光晕盘:启动时把「羽化圆 + 56px 模糊」预渲染成位图(GlowCache),
+                   动画只做位图合成,不再每帧重跑模糊 -->
+              <Image x:Name="glowPulse" Source="{DynamicResource PetalGlowImage}"
+                     Width="190" Height="190" Stretch="Fill"
+                     HorizontalAlignment="Center" VerticalAlignment="Center"
+                     IsHitTestVisible="False"
+                     RenderOptions.BitmapScalingMode="HighQuality"/>
               <!-- 玻璃盘:边缘羽化的主题色圆 -->
               <Ellipse x:Name="bd" Fill="{DynamicResource PetalFillSoftBrush}"/>
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>

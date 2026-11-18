@@ -216,6 +216,36 @@ public class SettingsPanel : UserControl
         root.Children.Add(Wrap("updRow", updRow, out _));
         _autoUpdateToggle = updToggle;
 
+        // 4b2 低特效 Toggle:老显卡/远程桌面自动开一次,之后尊重用户选择
+        var fxRow = new Grid();
+        fxRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        fxRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var fxInfo = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        fxInfo.Children.Add(new TextBlock
+        {
+            Text = "低特效模式", FontSize = 12.5, FontWeight = FontWeights.SemiBold, Foreground = T2,
+        });
+        fxInfo.Children.Add(new TextBlock
+        {
+            Text = "关闭星光、漂浮和开屏粒子(显卡加速不可用或远程桌面时自动开启)",
+            FontSize = 10.5, Foreground = T2, Opacity = 0.66, TextWrapping = TextWrapping.Wrap,
+        });
+        Grid.SetColumn(fxInfo, 0);
+        fxRow.Children.Add(fxInfo);
+        var fxToggle = new CheckBox
+        {
+            Style = (Style)Application.Current.Resources["GlassToggle"],
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        System.Windows.Automation.AutomationProperties.SetName(fxToggle, "低特效模式");
+        Grid.SetColumn(fxToggle, 1);
+        fxRow.Children.Add(fxToggle);
+        fxToggle.Checked += (_, _) => SetLowEffects(true);
+        fxToggle.Unchecked += (_, _) => SetLowEffects(false);
+        root.Children.Add(Wrap("fxRow", fxRow));
+        _lowFxToggle = fxToggle;
+
         // 4c 开机自启动 Toggle(默认关;写/删 HKCU Run 注册表项,立即生效)
         var autoRunRow = new Grid();
         autoRunRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -689,6 +719,8 @@ public class SettingsPanel : UserControl
     private bool _syncingVisToggle;
     private CheckBox? _autoUpdateToggle;
     private bool _syncingUpdateToggle;
+    private CheckBox? _lowFxToggle;
+    private bool _syncingLowFxToggle;
     private CheckBox? _autoRunToggle;
     private bool _syncingAutoRunToggle;
     private TextBlock? _priorityValue;
@@ -749,18 +781,21 @@ public class SettingsPanel : UserControl
             _syncingUpdateToggle = true;
             _syncingAutoRunToggle = true;
             _syncingOverlayToggle = true;
+            _syncingLowFxToggle = true;
             try
             {
                 _autoUpdateToggle!.IsChecked = c.AutoUpdate;
                 _autoRunToggle!.IsChecked = c.LaunchOnStartup;
                 _overlayToggle!.IsChecked = c.ShowStatsOverlay;
                 _conflictToggle!.IsChecked = c.CheckModConflictsBeforeLaunch;
+                _lowFxToggle!.IsChecked = c.LowEffects;
             }
             finally
             {
                 _syncingUpdateToggle = false;
                 _syncingAutoRunToggle = false;
                 _syncingOverlayToggle = false;
+                _syncingLowFxToggle = false;
             }
         }
         finally
@@ -818,6 +853,15 @@ public class SettingsPanel : UserControl
         if (_syncingUpdateToggle) return;
         AppServices.Config.AutoUpdate = on;
         Save();
+    }
+
+    private void SetLowEffects(bool on)
+    {
+        if (_syncingLowFxToggle) return;
+        AppServices.Config.LowEffects = on;
+        AppServices.Config.LowEffectsAutoApplied = true;   // 手动选择后不再自动覆盖
+        Save();
+        AppServices.Widget?.ApplyPerformanceMode();
     }
 
     private void SetLaunchOnStartup(bool on)

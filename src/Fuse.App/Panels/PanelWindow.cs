@@ -154,27 +154,24 @@ public class PanelWindow : Window
             e.Handled = true;
             window.Close();
         };
-        // 标题栏手动拖拽(捕获鼠标 + 增量移动,比 DragMove 可靠)
-        var dragging = false;
-        var dragOrigin = new Point();
+        // 标题栏拖动交给系统:进入 DWM 的移动循环,窗口移动时不再逐帧改 Left/Top
+        // (手改 Left/Top 会让整块分层窗口每移动一次就重新呈现,拖拽非常吃 CPU)
         titleBar.Cursor = System.Windows.Input.Cursors.SizeAll;
         titleBar.MouseLeftButtonDown += (_, e) =>
         {
-            dragging = true;
-            dragOrigin = e.GetPosition(window);
-            titleBar.CaptureMouse();
-        };
-        titleBar.MouseMove += (_, e) =>
-        {
-            if (!dragging) return;
-            var p = e.GetPosition(window);
-            window.Left += p.X - dragOrigin.X;
-            window.Top += p.Y - dragOrigin.Y;
-        };
-        titleBar.MouseLeftButtonUp += (_, _) =>
-        {
-            dragging = false;
-            titleBar.ReleaseMouseCapture();
+            if (e.ChangedButton != System.Windows.Input.MouseButton.Left) return;
+            e.Handled = true;
+            try
+            {
+                var hwnd = new WindowInteropHelper(window).Handle;
+                NativeMethods.ReleaseCapture();
+                NativeMethods.SendMessage(hwnd, NativeMethods.WmNcLButtonDown,
+                    new IntPtr(NativeMethods.HtCaption), IntPtr.Zero);
+            }
+            catch (Exception)
+            {
+                // 系统移动失败时不影响关闭/使用
+            }
         };
         OpenPanels[kind] = window;
         window.Closed += (_, _) =>
