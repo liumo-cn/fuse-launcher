@@ -97,7 +97,14 @@ public static class JavaLocator
         }
     }
 
-    /// <summary>按官方 javaVersion.majorVersion 挑选：优先精确匹配，其次更高版本中最小的。</summary>
+    /// <summary>
+    /// 用更高版本 Java 顶替时允许的最大跨度。
+    /// 1.20.1 要 17:用 21 是常见可用组合,但用 25 会让 Forge 的模块层/模组直接崩,
+    /// 所以超过这个跨度就返回 null,由调用方去下载官方精确版本。
+    /// </summary>
+    public const int MaxMajorDrift = 4;
+
+    /// <summary>按官方 javaVersion.majorVersion 挑选:优先精确匹配,其次跨度内的更高版本。</summary>
     public static JavaRuntime? Pick(IReadOnlyList<JavaRuntime> runtimes, int requiredMajor)
     {
         var exact = runtimes.FirstOrDefault(r => r.MajorVersion == requiredMajor);
@@ -108,7 +115,7 @@ public static class JavaLocator
         if (requiredMajor < 17) return null;
 
         return runtimes
-            .Where(r => r.MajorVersion > requiredMajor)
+            .Where(r => r.MajorVersion > requiredMajor && r.MajorVersion <= requiredMajor + MaxMajorDrift)
             .OrderBy(r => r.MajorVersion)
             .FirstOrDefault();
     }

@@ -51,6 +51,18 @@ public class JavaLocatorTests
     }
 
     [Fact]
+    public void Pick_RejectsFarNewerJava()
+    {
+        // 1.20.1 要 17,机子上只有 25(官方 epsilon):不能顶替,让上层去下 17
+        var only25 = new System.Collections.Generic.List<JavaRuntime> { Rt(25) };
+        Assert.Null(JavaLocator.Pick(only25, 17));
+
+        // 17→21 是常见可用组合,仍然允许
+        var only21 = new System.Collections.Generic.List<JavaRuntime> { Rt(21) };
+        Assert.Equal(21, JavaLocator.Pick(only21, 17)!.MajorVersion);
+    }
+
+    [Fact]
     public void HasServerJvm_RequiresServerJvmDll()
     {
         var root = NewTempRoot();
