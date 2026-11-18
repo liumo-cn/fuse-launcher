@@ -63,6 +63,17 @@ public class JavaLocatorTests
     }
 
     [Fact]
+    public void PickFallback_UsesClosestHigher_WhenDownloadFails()
+    {
+        var only25 = new System.Collections.Generic.List<JavaRuntime> { Rt(25) };
+        Assert.Equal(25, JavaLocator.PickFallback(only25, 17)!.MajorVersion);
+
+        var mixed = new System.Collections.Generic.List<JavaRuntime> { Rt(8), Rt(21), Rt(25) };
+        Assert.Equal(21, JavaLocator.PickFallback(mixed, 17)!.MajorVersion);
+        Assert.Null(JavaLocator.PickFallback(new System.Collections.Generic.List<JavaRuntime> { Rt(8) }, 17));
+    }
+
+    [Fact]
     public void HasServerJvm_RequiresServerJvmDll()
     {
         var root = NewTempRoot();

@@ -144,13 +144,27 @@ public sealed class LaunchPipeline
                 // 3. FR-05：缺 Java 且允许时，自动下载 Mojang 官方 java-runtime（溯源官方）
                 if (picked == null && options.JavaRuntimesRoot != null && options.AutoInstallJava)
                 {
-                    var entries = await MojangJavaRuntime.FetchCatalogAsync(_http, ct).ConfigureAwait(false);
-                    var entry = MojangJavaRuntime.Pick(entries, ctx.Version!.JavaVersion?.Component, required)
-                                ?? throw new InvalidOperationException($"官方清单中没有 Java {required} 的运行时");
-                    var dest = Path.Combine(options.JavaRuntimesRoot, entry.Component);
-                    picked = await MojangJavaRuntime.DownloadAsync(_http, entry, dest,
-                        new CallbackProgress(p => progress?.Report(new LoaderProgress("选择 Java", p, $"下载 {entry.VersionName}"))),
-                        ct).ConfigureAwait(false);
+                    try
+                    {
+                        var entries = await MojangJavaRuntime.FetchCatalogAsync(_http, ct).ConfigureAwait(false);
+                        var entry = MojangJavaRuntime.Pick(entries, ctx.Version!.JavaVersion?.Component, required)
+                                    ?? throw new InvalidOperationException($"官方清单中没有 Java {required} 的运行时");
+                        var dest = Path.Combine(options.JavaRuntimesRoot, entry.Component);
+                        picked = await MojangJavaRuntime.DownloadAsync(_http, entry, dest,
+                            new CallbackProgress(p => progress?.Report(new LoaderProgress("选择 Java", p, $"下载 {entry.VersionName}"))),
+                            ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (!ct.IsCancellationRequested)
+                    {
+                        // 下载失败(国内网络/清单镜像不一致)时退回本机已有的更高版本:
+                        // 至少能启动,比直接卡在"选择 Java"好;失败原因写进错误信息
+                        picked = JavaLocator.PickFallback(found, required);
+                        if (picked == null)
+                            throw new InvalidOperationException(
+                                $"本机未找到 Java {required}，自动下载也失败：{ex.Message}", ex);
+                        progress?.Report(new LoaderProgress("选择 Java", 1,
+                            $"Java {required} 下载失败，改用本机 Java {picked.MajorVersion}"));
+                    }
                 }
 
                 ctx.Java = picked

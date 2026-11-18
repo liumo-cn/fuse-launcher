@@ -120,6 +120,16 @@ public static class JavaLocator
             .FirstOrDefault();
     }
 
+    /// <summary>
+    /// 官方运行时下载失败时的兜底:取本机满足最低要求的最近版本(可以超出正常跨度)。
+    /// 高版本 Java 至少能让游戏起来,总比直接卡在"选择 Java"好。
+    /// </summary>
+    public static JavaRuntime? PickFallback(IReadOnlyList<JavaRuntime> runtimes, int requiredMajor)
+        => runtimes
+            .Where(r => r.MajorVersion >= requiredMajor)
+            .OrderBy(r => r.MajorVersion)
+            .FirstOrDefault();
+
     /// <summary>"17.0.1" → 17；"1.8.0_392" → 8；解析失败返回 0。</summary>
     public static int ParseMajor(string version)
     {

@@ -32,9 +32,10 @@ public static class LocalSkinSetup
             var capeFile = Path.Combine(skinsDir, "cape.png");
             if (!File.Exists(skinFile) && !File.Exists(capeFile)) return false;
 
-            var version = VersionJsonLoader.Load(versionsRoot, versionId);
-            var mc = string.IsNullOrEmpty(version.Jar) ? versionId : version.Jar!;
-            var loader = DetectLoader(version);
+            // 整合包实例的 version.json 往往只有 inheritsFrom + fuseModpack 标记,
+            // 必须沿父链解析出真实 MC 版本 + 加载器,否则 CSL 会被整个跳过
+            var mc = VersionJsonLoader.ResolveGameVersion(versionsRoot, versionId);
+            var loader = DetectLoader(VersionJsonLoader.Load(versionsRoot, versionId));
             if (loader == null) return false;   // 原版没有模组加载能力
 
             var modsDir = Path.Combine(instanceDir, "mods");
@@ -126,9 +127,8 @@ public static class LocalSkinSetup
         {
             RestoreForLocal(instanceDir);   // 旧版本停用过 CSL 的先放回 mods
 
-            var version = VersionJsonLoader.Load(versionsRoot, versionId);
-            var mc = string.IsNullOrEmpty(version.Jar) ? versionId : version.Jar!;
-            var loader = DetectLoader(version);
+            var mc = VersionJsonLoader.ResolveGameVersion(versionsRoot, versionId);
+            var loader = DetectLoader(VersionJsonLoader.Load(versionsRoot, versionId));
             if (loader == null) return false;   // 原版装不了模组,只能靠站点直供
 
             await EnsureCustomSkinLoaderAsync(http, mc, loader, Path.Combine(instanceDir, "mods"), ct)
@@ -546,14 +546,24 @@ public static class LocalSkinSetup
 
     /// <summary>按 version.json 里的库判断加载器(与详情页同规则)。</summary>
     private static string? DetectLoader(McVersion version)
+        => DetectLoaderFromLibraries(version.Libraries.Select(l => l.Name));
+
+    /// <summary>
+    /// 按库名判断加载器。Forge 47+ 不再有 net.minecraftforge:forge: 这个 artifact,
+    /// 但所有 Forge 版本都会带 net.minecraftforge:* 的库(accesstransformers/fmlloader 等),
+    /// 所以和 AppLauncher 用同一条规则。
+    /// </summary>
+    public static string? DetectLoaderFromLibraries(IEnumerable<string> libraryNames)
     {
-        var names = version.Libraries.Select(l => l.Name).ToList();
-        if (names.Any(n => n.StartsWith("net.fabricmc:fabric-loader", StringComparison.OrdinalIgnoreCase)))
-            return "fabric";
-        if (names.Any(n => n.StartsWith("net.neoforged", StringComparison.OrdinalIgnoreCase)))
-            return "neoforge";
-        if (names.Any(n => n.StartsWith("net.minecraftforge:forge:", StringComparison.OrdinalIgnoreCase)))
-            return "forge";
+        foreach (var name in libraryNames)
+        {
+            if (name.StartsWith("net.fabricmc:fabric-loader", StringComparison.OrdinalIgnoreCase))
+                return "fabric";
+            if (name.StartsWith("net.neoforged", StringComparison.OrdinalIgnoreCase))
+                return "neoforge";
+            if (name.StartsWith("net.minecraftforge:", StringComparison.OrdinalIgnoreCase))
+                return "forge";
+        }
         return null;
     }
 }

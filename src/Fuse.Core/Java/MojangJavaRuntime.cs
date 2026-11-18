@@ -132,6 +132,53 @@ public static class MojangJavaRuntime
     }
 
     /// <summary>下载并落盘一个运行时（含清单校验、全部文件 SHA-1 校验、写 runtime-meta.json 标记）。</summary>
+    /// <summary>
+    /// 下载并校验运行时清单。优先官方 piston-meta,失败换 launchermeta 别名,
+    /// 最后才试镜像;镜像内容哈希对不上就直接报错(不把旧清单当官方清单用)。
+    /// </summary>
+    private static async Task<byte[]> FetchManifestAsync(
+        HttpClient http, JavaRuntimeEntry entry, CancellationToken ct)
+    {
+        var urls = new List<string> { entry.ManifestUrl };
+        if (Uri.TryCreate(entry.ManifestUrl, UriKind.Absolute, out var uri) &&
+            uri.Host.Equals("piston-meta.mojang.com", StringComparison.OrdinalIgnoreCase))
+            urls.Add("https://launchermeta.mojang.com" + uri.PathAndQuery);
+        var mirror = Download.UrlMirror.Rewrite(entry.ManifestUrl);
+        if (!string.IsNullOrEmpty(mirror)) urls.Add(mirror);
+
+        var errors = new List<string>();
+        foreach (var url in urls.Distinct())
+        {
+            try
+            {
+                using var resp = await http.GetAsync(url, ct).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
+                var bytes = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+                if (!string.IsNullOrEmpty(entry.ManifestSha1) &&
+                    !string.Equals(Sha1Hex(bytes), entry.ManifestSha1, StringComparison.OrdinalIgnoreCase))
+                {
+                    errors.Add(url + "：SHA-1 不匹配");
+                    continue;
+                }
+                return bytes;
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested)
+            {
+                errors.Add(url + "：" + ex.Message);
+            }
+        }
+        throw new IOException("Java 运行时清单下载失败：" + string.Join("；", errors));
+    }
+
+    private static string Sha1Hex(byte[] bytes)
+    {
+        using var sha = System.Security.Cryptography.SHA1.Create();
+        var hash = sha.ComputeHash(bytes);
+        var sb = new System.Text.StringBuilder(hash.Length * 2);
+        foreach (var b in hash) sb.Append(b.ToString("x2"));
+        return sb.ToString();
+    }
+
     public static async Task<JavaRuntime> DownloadAsync(
         HttpClient http, JavaRuntimeEntry entry, string destDir,
         IProgress<double>? progress = null, CancellationToken cancellation = default)
@@ -139,23 +186,12 @@ public static class MojangJavaRuntime
         Directory.CreateDirectory(destDir);
 
         // 1. 清单本体（SHA-1 校验）
+        // 单独下:BMCL 镜像上的 Java 运行时清单可能是旧版本(哈希对不上),
+        // 走官方/launchermeta 别名并在哈希不符时明确失败,不要吞掉原因。
         var manifestPath = Path.Combine(destDir, ".manifest.json");
-        // 运行时清单只有几十 KB,走小文件下载即可:分块(Range)在部分镜像上会被忽略,
-        // 拼出来的内容哈希校验必然失败。
-        var manifestDownloader = new SmallFileDownloader(http);
-        var manifestResult = await manifestDownloader.DownloadSetAsync(new[]
-        {
-            new FileDownloadItem
-            {
-                Url = entry.ManifestUrl,
-                DestPath = manifestPath,
-                ExpectedHash = entry.ManifestSha1,
-                Algo = HashAlgo.Sha1,
-            },
-        }, new SmallFileOptions { Parallelism = 1 }, null, cancellation).ConfigureAwait(false);
-        if (manifestResult.Failed.Count > 0)
-            throw new IOException("Java 运行时清单下载失败:" + manifestResult.Failed[0]);
-        var manifest = JObject.Parse(File.ReadAllText(manifestPath));
+        var manifestBytes = await FetchManifestAsync(http, entry, cancellation).ConfigureAwait(false);
+        File.WriteAllBytes(manifestPath, manifestBytes);
+        var manifest = JObject.Parse(System.Text.Encoding.UTF8.GetString(manifestBytes));
 
         // 2. 全部文件（小文件高并发，raw 渠道）
         var items = PlanFiles(manifest, destDir);

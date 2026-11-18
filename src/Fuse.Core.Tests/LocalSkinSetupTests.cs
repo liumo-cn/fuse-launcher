@@ -192,6 +192,17 @@ public class LocalSkinSetupTests : IDisposable
     public void IsIncompatibleForgeCsl(string file, bool expected)
         => Assert.Equal(expected, LocalSkinSetup.IsIncompatibleForgeCsl(file));
 
+    // ---------- 加载器识别 ----------
+
+    [Theory]
+    [InlineData("net.minecraftforge:accesstransformers:8.0.4", "forge")]
+    [InlineData("net.minecraftforge:fmlloader:1.20.1-47.4.16", "forge")]
+    [InlineData("net.fabricmc:fabric-loader:0.15.0", "fabric")]
+    [InlineData("net.neoforged:neoforge:21.1.193", "neoforge")]
+    [InlineData("com.mojang:brigadier:1.1.8", null)]
+    public void DetectLoaderFromLibraries(string lib, string? expected)
+        => Assert.Equal(expected, LocalSkinSetup.DetectLoaderFromLibraries(new[] { lib }));
+
     // ---------- 恢复 CSL / 清理条目 ----------
 
     [Fact]
