@@ -66,8 +66,9 @@ public partial class MainWindow : Window
         {
             // 静默模式:窗口从未显示,Close() 不会结束消息循环,必须显式 Shutdown。
             // /RUN 的启动由 Install() 内部处理(这里再启一次会开出两个启动器)。
-            Install(_installDir, _gamesDir);
-            Application.Current.Shutdown();
+            // 退出码交给接力脚本:0=成功,非 0=失败(它会把旧启动器重新拉起来)
+            var ok = Install(_installDir, _gamesDir);
+            Application.Current.Shutdown(ok ? 0 : 1);
             return;
         }
         ShowWelcome();
@@ -92,6 +93,15 @@ public partial class MainWindow : Window
             else if (a.Equals("PORTABLE", StringComparison.OrdinalIgnoreCase)) _portable = true;
             else if (a.Equals("RUN", StringComparison.OrdinalIgnoreCase)) _autoRun = true;
         }
+
+        // 自更新接力:路径用环境变量传(值不是命令行,盘根/引号/中文都不会被截断)
+        var envInstall = Environment.GetEnvironmentVariable("FUSE_INSTALL_DIR");
+        if (!string.IsNullOrWhiteSpace(envInstall)) _installDir = envInstall!;
+        var envGames = Environment.GetEnvironmentVariable("FUSE_GAMES_DIR");
+        if (!string.IsNullOrWhiteSpace(envGames)) _gamesDir = envGames!;
+        // 便携模式标记跟随安装目录:自更新不传 /PORTABLE 也不会把配置写到 AppData
+        if (File.Exists(Path.Combine(_installDir, "portable"))) _portable = true;
+        Log("env: install='" + _installDir + "' games='" + _gamesDir + "'");
     }
 
     // ---------- 向导页面 ----------
@@ -289,7 +299,7 @@ public partial class MainWindow : Window
 
     // ---------- 安装 / 卸载 ----------
 
-    private void Install(string installDir, string gamesDir)
+    private bool Install(string installDir, string gamesDir)
     {
         Log($"install begin: '{installDir}' games='{gamesDir}' silent={_silent}");
         try
@@ -348,16 +358,21 @@ public partial class MainWindow : Window
                     WriteInitialConfig(configPath, gamesDir);
                 }
             }
-            Directory.CreateDirectory(gamesDir);
+            // 游戏目录只影响"首次安装的默认下载目录":升级时路径失效(移动硬盘拔了/
+            // 盘符变了/手填了非法路径)不该让整个更新失败
+            try { Directory.CreateDirectory(gamesDir); }
+            catch (Exception ex) { Log("games dir create skipped: " + ex.Message); }
 
             Report(92, "创建快捷方式…");
-            CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), AppName + ".lnk"),
+            // 快捷方式只是便利:桌面/开始菜单被重定向到不存在的目录(OneDrive 卸载、
+            // 组策略)时不能把整个更新判失败
+            TryShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), AppName + ".lnk"),
                 Path.Combine(installDir, AppExe), installDir);
             var startMenu = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs");
-            Directory.CreateDirectory(startMenu);
-            CreateShortcut(Path.Combine(startMenu, AppName + ".lnk"), Path.Combine(installDir, AppExe), installDir);
-            CreateShortcut(Path.Combine(startMenu, "卸载 " + AppName + ".lnk"),
+            try { Directory.CreateDirectory(startMenu); } catch (Exception ex) { Log("start menu skipped: " + ex.Message); }
+            TryShortcut(Path.Combine(startMenu, AppName + ".lnk"), Path.Combine(installDir, AppExe), installDir);
+            TryShortcut(Path.Combine(startMenu, "卸载 " + AppName + ".lnk"),
                 Path.Combine(installDir, "Uninstall " + AppName + ".exe"), installDir);
 
             Report(96, "注册卸载信息…");
@@ -366,8 +381,15 @@ public partial class MainWindow : Window
             var uninstallExe = Path.Combine(installDir, "Uninstall " + AppName + ".exe");
             if (!File.Exists(uninstallExe))
             {
-                File.Copy(self, uninstallExe, overwrite: true);
-                Log("uninstaller missing in payload, copied self");
+                try
+                {
+                    File.Copy(self, uninstallExe, overwrite: true);
+                    Log("uninstaller missing in payload, copied self");
+                }
+                catch (Exception ex)
+                {
+                    Log("uninstaller copy skipped: " + ex.Message);
+                }
             }
             using (var key = Registry.CurrentUser.CreateSubKey(UninstallKey))
             {
@@ -385,14 +407,20 @@ public partial class MainWindow : Window
 
             Report(100, "完成");
             Log("install ok");
-            if (_silent) { if (_autoRun) Launch(); Application.Current.Shutdown(); return; }
+            if (_silent) { if (_autoRun) Launch(); return true; }
             ShowFinish();
+            return true;
         }
         catch (Exception ex)
         {
             Log("install FAILED: " + ex);
-            MessageBox.Show("安装失败：" + ex.Message, AppName, MessageBoxButton.OK, MessageBoxImage.Error);
-            if (_silent) Application.Current.Shutdown(); else Close();
+            // 静默模式(自动更新)不能弹框:没人点,接力脚本只能看到进程卡住/失败
+            if (!_silent)
+            {
+                MessageBox.Show("安装失败：" + ex.Message, AppName, MessageBoxButton.OK, MessageBoxImage.Error);
+                Close();
+            }
+            return false;
         }
     }
 
@@ -481,6 +509,12 @@ public partial class MainWindow : Window
     private static void DeleteShortcut(string path)
     {
         try { if (File.Exists(path)) File.Delete(path); } catch { }
+    }
+
+    private static void TryShortcut(string lnkPath, string targetPath, string workDir)
+    {
+        try { CreateShortcut(lnkPath, targetPath, workDir); }
+        catch (Exception ex) { Log("shortcut skipped: " + lnkPath + " · " + ex.Message); }
     }
 
     private static void CreateShortcut(string lnkPath, string targetPath, string workDir)

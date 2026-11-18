@@ -227,7 +227,7 @@ internal static class Updater
             throw new InvalidOperationException("清单没有 sha256,无法校验完整性,已拒绝更新");
 
         // 版本号已通过正则校验,拼进文件名不会有路径分隔符或非法字符
-        var target = Path.Combine(Path.GetTempPath(), "FuseLauncher-Setup-" + m.Version + ".exe");
+        var target = Path.Combine(SafeTempRoot(), "FuseLauncher-Setup-" + m.Version + ".exe");
         var temp = target + ".tmp";
 
         try
@@ -303,6 +303,26 @@ internal static class Updater
     // ---------------- 接力安装 ----------------
 
     /// <summary>
+    /// %TEMP% 被清理工具删掉/指向已拔出的盘时,退回配置目录下的 update 文件夹,
+    /// 不让"下载目录错误"直接卡死更新。
+    /// </summary>
+    private static string SafeTempRoot()
+    {
+        try
+        {
+            var temp = Path.GetTempPath();
+            Directory.CreateDirectory(temp);
+            if (Directory.Exists(temp)) return temp;
+        }
+        catch (Exception)
+        {
+        }
+        var fallback = Path.Combine(Path.GetDirectoryName(AppServices.ConfigPath)!, "update");
+        Directory.CreateDirectory(fallback);
+        return fallback;
+    }
+
+    /// <summary>
     /// 静默重装并重启。本进程还占着 exe 文件锁,所以挂一个隐藏的 PowerShell
     /// (-EncodedCommand,UTF-16 Base64,中文路径不会像 cmd/ASCII 那样变成 ????):
     /// 结束启动器进程 → 静默安装(保留用户 config)→ /RUN 自动重启,然后本进程退出。
@@ -321,16 +341,28 @@ internal static class Updater
         Log("apply: " + setupPath);
 
         var appDir = Path.GetDirectoryName(Assembly.GetEntryAssembly()!.Location)!;
-        var gamesDir = AppServices.Config.InstallDirectory;
+        var gamesDir = AppServices.InstallDirectory;
         var pid = Process.GetCurrentProcess().Id;
 
-        var script = string.Join("; ",
+        // 路径用环境变量传给安装器(FUSE_INSTALL_DIR/FUSE_GAMES_DIR),不再拼命令行:
+        // 盘根(D:\)、尾随反斜杠、引号、中文都不会把参数解析打断。
+        // 安装器被杀软拦截/启动失败时也要把旧启动器拉起来,所以整段包在 try/catch 里。
+        var script = string.Join("\n",
             "Start-Sleep -Milliseconds 900",
             "$p = Get-Process -Id $env:FUSE_PID -ErrorAction SilentlyContinue; if ($p) { $p | Stop-Process -Force }",
             "$pm = Get-Process -Name 'PresentMon-x64' -ErrorAction SilentlyContinue; if ($pm) { $pm | Stop-Process -Force }",
             "Start-Sleep -Milliseconds 300",
-            "$arg = '/SILENT /INSTALL=\"' + $env:FUSE_APPDIR + '\" /GAMES=\"' + $env:FUSE_GAMES + '\" /RUN'",
-            "[System.Diagnostics.Process]::Start($env:FUSE_SETUP, $arg)");
+            "$log = Join-Path $env:TEMP 'fuse-update.log'",
+            "Add-Content -Path $log -Value ((Get-Date -Format 'HH:mm:ss.fff') + ' setup=' + $env:FUSE_SETUP + ' install=' + $env:FUSE_INSTALL_DIR)",
+            "try {",
+            "  $proc = [System.Diagnostics.Process]::Start($env:FUSE_SETUP, '/SILENT /RUN')",
+            "  $proc.WaitForExit()",
+            "  Add-Content -Path $log -Value ((Get-Date -Format 'HH:mm:ss.fff') + ' setup exit=' + $proc.ExitCode)",
+            "  if ($proc.ExitCode -ne 0) { Start-Process (Join-Path $env:FUSE_APPDIR 'Fuse Launcher.exe') }",
+            "} catch {",
+            "  Add-Content -Path $log -Value ((Get-Date -Format 'HH:mm:ss.fff') + ' failed: ' + $_.Exception.Message)",
+            "  Start-Process (Join-Path $env:FUSE_APPDIR 'Fuse Launcher.exe')",
+            "}");
 
         var psi = new ProcessStartInfo("powershell.exe")
         {
@@ -339,7 +371,8 @@ internal static class Updater
         };
         psi.EnvironmentVariables["FUSE_SETUP"] = setupPath;
         psi.EnvironmentVariables["FUSE_APPDIR"] = appDir;
-        psi.EnvironmentVariables["FUSE_GAMES"] = gamesDir ?? string.Empty;
+        psi.EnvironmentVariables["FUSE_INSTALL_DIR"] = appDir;
+        psi.EnvironmentVariables["FUSE_GAMES_DIR"] = gamesDir ?? string.Empty;
         psi.EnvironmentVariables["FUSE_PID"] = pid.ToString(CultureInfo.InvariantCulture);
         psi.Arguments = "-NoProfile -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
 
