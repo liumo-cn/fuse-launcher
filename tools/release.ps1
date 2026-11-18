@@ -75,6 +75,13 @@ else {
     Ok "从 csproj 读取：$Version"
 }
 
+# 版本号规则：patch 只到 11，1.x.11 之后直接进位到 (x+1).0
+# （例如 1.3.11 → 1.4.0、1.4.11 → 1.5.0），不允许 1.3.12 这类
+$verParts = $Version.Split('.')
+if ($verParts.Count -ge 3 -and [int]$verParts[2] -gt 11) {
+    Fail ("版本号规则：" + $verParts[0] + "." + $verParts[1] + ".11 之后应进位为 " + $verParts[0] + "." + ([int]$verParts[1] + 1) + ".0，patch 不能超过 11")
+}
+
 # ---------- 2) 打包 ----------
 Step '2/5' '打安装包'
 $setupPath = Join-Path $root ("dist\FuseLauncher-Setup-$Version.exe")
