@@ -1195,17 +1195,23 @@ public partial class WidgetWindow : Window
 
     public async Task LaunchLastVersionAsync()
     {
-        var versionId = AppServices.Config.LastLaunchedVersion;
-        if (string.IsNullOrEmpty(versionId))
-        {
-            var installed = InstalledVersionScanner.Scan(
-                AppServices.VersionsRoot, AppServices.InstancesRoot, AppServices.LibrariesRoot);
-            versionId = installed.FirstOrDefault()?.Id;
-        }
+        var installed = InstalledVersionScanner.Scan(
+            AppServices.VersionsRoot, AppServices.InstancesRoot, AppServices.LibrariesRoot);
+        var versionId = LaunchVersionPicker.Pick(
+            AppServices.Config.LastLaunchedVersion,
+            installed.Select(v => v.Id).ToList(), out var repaired);
         if (string.IsNullOrEmpty(versionId))
         {
             Boot("launch skipped: no installed version");
             return;
+        }
+        if (repaired)
+        {
+            // 上次启动的版本被改名/删除/乱码了:回退到第一个并修掉配置,
+            // 否则每次点大圆都会弹"缺少 version json"
+            Boot("[launch] last version missing, fallback to " + versionId);
+            AppServices.Config.LastLaunchedVersion = versionId;
+            AppServices.SaveConfig();
         }
 
         // 统一走 AppLauncher(带同版本占位):进度回调很密集,只在阶段切换时落日志
