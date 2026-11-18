@@ -19,6 +19,7 @@ public class VersionRangeMavenTests
     [InlineData("1.20.1", "[1.20.1,1.21)")]               // 下边界闭
     [InlineData("1.20.1-1.2.8", "[1.20.1,1.21)")]         // Forge 合成版本串不按 '-' 拆
     [InlineData("0.3.28+mc1.20.1", "[0.3.19+mc1.20.1,)")] // + 元数据按 Maven 切分后数值比较
+    [InlineData("1.20.1-1.2.8", "[1.20-1.2,)")]           // '-' 后是子列表:MC 段 1.20.1 > 1.20
     public void RealWorldVectors_AreInRange(string version, string constraint)
     {
         Assert.True(VersionRange.Matches(version, constraint), $"{version} 应满足 {constraint}");
@@ -37,8 +38,8 @@ public class VersionRangeMavenTests
     [Theory]
     [InlineData("1.0", "1.0.0")]
     [InlineData("1.0", "1.0.0.0.0")]
-    [InlineData("1-ga", "1.0")]
-    [InlineData("1-final", "1.0")]
+    [InlineData("1.0-ga", "1.0")]
+    [InlineData("1.0-final", "1.0")]
     [InlineData("1", "1-release")]
     public void MavenEquivalences_CompareEqual(string a, string b)
     {
@@ -57,6 +58,7 @@ public class VersionRangeMavenTests
     [InlineData("1.0", "1.0-sp")]          // sp > release
     [InlineData("1.0", "1.0-fix")]         // 未知限定符 > release
     [InlineData("1.0.9", "1.0.10")]        // 数值感知:9 < 10(字典序会判反)
+    [InlineData("1.20-1.2", "1.20.1-1.2.8")] // '-' 两侧分段比较:MC 段 1.20 < 1.20.1
     public void Ordering_MatchesMavenSemantics(string smaller, string larger)
     {
         var va = MavenVersion.TryCreate(smaller, out var x) ? x : throw new InvalidOperationException(smaller);
