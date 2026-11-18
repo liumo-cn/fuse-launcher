@@ -166,6 +166,18 @@ public class LocalSkinSetupTests : IDisposable
         Assert.True(File.Exists(Path.Combine(dir, "ExtraList", "FuseSkinSite.json")));
     }
 
+    // ---------- Forge 上的 CSL 版本选择 ----------
+
+    [Theory]
+    [InlineData("CustomSkinLoader_Universal-15.1.jar", true)]
+    [InlineData("CustomSkinLoader_Universal-15.0.1.jar", true)]
+    [InlineData("CustomSkinLoader_Universal-16.0.jar", true)]
+    [InlineData("CustomSkinLoader_Universal-14.28.jar", false)]
+    [InlineData("CustomSkinLoader_ForgeV2-14.28.jar", false)]
+    [InlineData("sodium-fabric.jar", false)]
+    public void IsIncompatibleForgeCsl(string file, bool expected)
+        => Assert.Equal(expected, LocalSkinSetup.IsIncompatibleForgeCsl(file));
+
     // ---------- 恢复 CSL / 清理条目 ----------
 
     [Fact]

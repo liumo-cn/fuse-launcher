@@ -344,26 +344,57 @@ public static class LocalSkinSetup
 
     /// <summary>
     /// 确保 mods 里有 CustomSkinLoader。先在 Modrinth 按"MC 版本 + 加载器"查;
-    /// 查不到(例如 NeoForge 不在该项目的 loader 列表里)就退回按游戏版本查,
-    /// CSL 是 universal jar,任何加载器都能跑。
+    /// 查不到(例如 NeoForge 不在该项目的 loader 列表里)就退回按游戏版本查。
+    ///
+    /// Forge 特殊处理:CSL 15.x 的 universal jar 在 Forge + Sinytra Connector 下会
+    /// 触发 JPMS 冲突(Modules minecraft and customskinloader export package …),
+    /// 游戏直接起不来。Forge 一律用 14.x 的 ForgeV2 专用包;已经装着的 universal 15.x
+    /// 就地改名成 .disabled,不再被 Forge 扫描。
     /// </summary>
     private static async Task EnsureCustomSkinLoaderAsync(
         HttpClient http, string mc, string loader, string modsDir, CancellationToken ct)
     {
         Directory.CreateDirectory(modsDir);
-        var hasCsl = Directory.EnumerateFiles(modsDir, "*.jar", SearchOption.TopDirectoryOnly)
-            .Any(f => Path.GetFileName(f).IndexOf("CustomSkinLoader", StringComparison.OrdinalIgnoreCase) >= 0);
-        if (hasCsl) return;
+        var cslJars = Directory.EnumerateFiles(modsDir, "*.jar", SearchOption.TopDirectoryOnly)
+            .Where(f => Path.GetFileName(f).IndexOf("CustomSkinLoader", StringComparison.OrdinalIgnoreCase) >= 0)
+            .ToList();
+
+        if (string.Equals(loader, "forge", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var jar in cslJars.Where(f => IsIncompatibleForgeCsl(Path.GetFileName(f))))
+            {
+                try
+                {
+                    var disabled = jar + ".disabled";
+                    if (File.Exists(disabled)) File.Delete(disabled);
+                    File.Move(jar, disabled);
+                }
+                catch (Exception)
+                {
+                    // 游戏正在跑锁住了 jar:这次保持原样,下次启动会再尝试
+                }
+            }
+            cslJars = Directory.EnumerateFiles(modsDir, "*.jar", SearchOption.TopDirectoryOnly)
+                .Where(f => Path.GetFileName(f).IndexOf("CustomSkinLoader", StringComparison.OrdinalIgnoreCase) >= 0)
+                .ToList();
+        }
+        if (cslJars.Count > 0) return;
 
         ModrinthVersionFile? file = null;
-        try
+        if (string.Equals(loader, "forge", StringComparison.OrdinalIgnoreCase))
+            file = await FindForgeCslAsync(http, mc, ct).ConfigureAwait(false);
+
+        if (file == null)
         {
-            file = await ModrinthSource.GetLatestVersionFileAsync(http, "customskinloader", mc, loader, ct)
-                .ConfigureAwait(false);
-        }
-        catch (Exception) when (!ct.IsCancellationRequested)
-        {
-            file = await FindCslByGameVersionAsync(http, mc, ct).ConfigureAwait(false);
+            try
+            {
+                file = await ModrinthSource.GetLatestVersionFileAsync(http, "customskinloader", mc, loader, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                file = await FindCslByGameVersionAsync(http, mc, ct).ConfigureAwait(false);
+            }
         }
 
         if (file == null) return;   // 该 MC 版本确实没有 CSL:调用方只提示,不拦截启动
@@ -386,6 +417,51 @@ public static class LocalSkinSetup
         {
             // 下载失败不影响本地文件铺设,下次启动会重试
         }
+    }
+
+    /// <summary>
+    /// CSL 15+ 的 universal jar 在 Forge 上会和 Connector 加载的 Fabric 模组抢
+    /// net.minecraft.client.renderer 的模块导出,导致 ResolutionException。
+    /// ForgeV2 专用包(14.x)没有这个问题。
+    /// </summary>
+    public static bool IsIncompatibleForgeCsl(string fileName)
+    {
+        var i = fileName.IndexOf("Universal-", StringComparison.OrdinalIgnoreCase);
+        if (i < 0) return false;
+        var rest = fileName.Substring(i + "Universal-".Length);
+        var dot = rest.IndexOf('.');
+        var majorText = dot > 0 ? rest.Substring(0, dot) : rest;
+        return int.TryParse(majorText, out var major) && major >= 15;
+    }
+
+    /// <summary>取该 MC 版本下最新的 14.x ForgeV2 包;没有就返回 null 走通用逻辑。</summary>
+    private static async Task<ModrinthVersionFile?> FindForgeCslAsync(
+        HttpClient http, string mc, CancellationToken ct)
+    {
+        var url = "https://api.modrinth.com/v2/project/customskinloader/version?game_versions=%5B%22"
+                  + Uri.EscapeDataString(mc) + "%22%5D&loaders=%5B%22forge%22%5D";
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(25));
+        using var resp = await http.GetAsync(url, cts.Token).ConfigureAwait(false);
+        if (!resp.IsSuccessStatusCode) return null;
+        var arr = JArray.Parse(await resp.Content.ReadAsStringAsync().ConfigureAwait(false));
+        foreach (var version in arr.OfType<JObject>())
+        {
+            // 15.x 是 universal,会和 Connector 冲突;14.x 才有 ForgeV2 专用构建
+            var number = version.Value<string>("version_number") ?? "";
+            if (!number.StartsWith("14.", StringComparison.Ordinal)) continue;
+            var f = (version["files"] as JArray)?.OfType<JObject>()
+                .FirstOrDefault(x => ((x.Value<string>("filename")) ?? "").EndsWith(".jar", StringComparison.OrdinalIgnoreCase));
+            if (f == null) continue;
+            return new ModrinthVersionFile(
+                f.Value<string>("url") ?? "",
+                f.Value<string>("filename") ?? "",
+                (f["hashes"]?.Value<string>("sha1")) ?? "",
+                version.Value<string>("id") ?? "",
+                new List<string>(),
+                new List<ModrinthDependency>());
+        }
+        return null;
     }
 
     /// <summary>不按加载器过滤,只按游戏版本找 CustomSkinLoader 的 jar。</summary>
