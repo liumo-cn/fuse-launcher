@@ -528,8 +528,11 @@
     <SolidColorBrush x:Key="PetalBorderBrush" Color="#8CA416E5"/>
 
     <Style x:Key="PetalButton" TargetType="Button">
-      <Setter Property="Width" Value="74"/>
-      <Setter Property="Height" Value="74"/>
+      <!-- 布局槽 190x190 = 光晕位图全尺寸:带透明度动画的元素绝不能溢出布局槽,
+           否则分层窗口里动画帧会被槽位边界方形裁切(悬浮方形残留的根因)。
+           命中区域仍只有玻璃圆盘:模板根/网格无背景,实际渲染内容才可命中。 -->
+      <Setter Property="Width" Value="190"/>
+      <Setter Property="Height" Value="190"/>
       <Setter Property="FontSize" Value="13"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
@@ -537,28 +540,28 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <!-- 光晕图必须在悬浮缩放子树【之外】:悬浮时 petalHoverScale 变成非恒等变换,
-                 溢出按钮槽位的 190px 光晕会在缩放子树的渲染里被方形裁切(分层窗口残留,
-                 低特效下没有逐帧重绘冲不掉)。缩放只作用于玻璃圆盘和图标(74px 内)。 -->
             <Grid>
+              <!-- 光晕盘:启动时把「羽化圆 + 56px 模糊」预渲染成位图(GlowCache),
+                   动画只做位图合成,不再每帧重跑模糊;恰好填满 190px 槽位 -->
               <Image x:Name="glowPulse" Source="{DynamicResource PetalGlowImage}"
                      Width="190" Height="190" Stretch="Fill"
                      HorizontalAlignment="Center" VerticalAlignment="Center"
                      IsHitTestVisible="False"
                      RenderOptions.BitmapScalingMode="HighQuality"/>
-              <!-- 悬浮放大层:以自身中心为基准(56px 的一半),代码里把 ScaleX/Y 动画到 1.25 -->
-              <Grid x:Name="petalRoot" RenderTransformOrigin="0.5,0.5">
+              <!-- 悬浮放大层:以圆盘中心(95,95)为基准,代码里把 ScaleX/Y 动画到 1.25;
+                   圆盘 74px 放大到 92px,完全在 190px 槽位内,不产生溢出 -->
+              <Grid RenderTransformOrigin="0.5,0.5">
                 <Grid.RenderTransform>
                   <ScaleTransform x:Name="petalHoverScale" ScaleX="1" ScaleY="1"/>
                 </Grid.RenderTransform>
                 <!-- 玻璃盘:边缘羽化的主题色圆 -->
-                <Ellipse x:Name="bd" Fill="{DynamicResource PetalFillSoftBrush}"/>
-                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <Ellipse x:Name="bd" Width="74" Height="74" Fill="{DynamicResource PetalFillSoftBrush}"/>
+                <ContentPresenter Width="74" Height="74" HorizontalAlignment="Center" VerticalAlignment="Center"/>
               </Grid>
             </Grid>
             <ControlTemplate.Triggers>
               <!-- 悬浮:只换渐变换亮(不加任何描边/Effect——Effect 的中间渲染面会在
-                   分层窗口里留下方形残留,且低特效下没有星光重绘来冲掉它) -->
+                   分层窗口里留下方形残留) -->
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Fill" Value="{DynamicResource PetalHoverFillBrush}"/>
               </Trigger>

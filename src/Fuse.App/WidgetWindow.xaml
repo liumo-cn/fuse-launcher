@@ -24,22 +24,22 @@
                RenderOptions.BitmapScalingMode="HighQuality"/>
       </Grid>
       <!-- 五花瓣:叠于大圆中心(初始藏于背后),展开时沿圆弧飞出成正五边形槽位。
-           Margin 101 = 圆心 138 - 花瓣半宽 37,保证五瓣的飞行圆心与大圆圆心重合 -->
+           Margin 43 = 圆心 138 - 布局槽半宽 95,保证五瓣的飞行圆心与大圆圆心重合 -->
       <Button x:Name="PetalLogin" Style="{StaticResource PetalButton}" Content="登录"
-              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="43,43,0,0"
               Click="Petal_Click" Tag="login"/>
       <Button x:Name="PetalDownload" Style="{StaticResource PetalButton}" Content="下载"
-              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="43,43,0,0"
               Click="Petal_Click" Tag="download"/>
       <Button x:Name="PetalSettings" Style="{StaticResource PetalButton}" Content="设置"
-              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="43,43,0,0"
               Click="Petal_Click" Tag="settings"/>
       <Button x:Name="PetalVersions" Style="{StaticResource PetalButton}" Content="版本"
-              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="43,43,0,0"
               Click="Petal_Click" Tag="versions"/>
       <!-- 更多:图标先留空(内容待设计),只保留玻璃盘与自动化名称 -->
       <Button x:Name="PetalMore" Style="{StaticResource PetalButton}"
-              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="101,101,0,0"
+              HorizontalAlignment="Left" VerticalAlignment="Top" Margin="43,43,0,0"
               Click="Petal_Click" Tag="more"/>
 
       <!-- 中心启动大圆(80px,可拖动/单击启动;启动特效期间由代码挂 Scale/Translate 变换) -->

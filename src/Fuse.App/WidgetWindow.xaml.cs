@@ -81,7 +81,7 @@ public partial class WidgetWindow : Window
     // 五花瓣全部叠于大圆中心,展开时各自沿"自己的顶点方向"直线飞出(不再扫过圆弧):
     // 扫弧会让相邻花瓣在半路交叉重叠,改成固定朝向 + 平移距离动画后互不影响。
     private const double ArcRadius = 100;     // 花瓣中心距大圆心(用户要求"离大圆近一点点")
-    private const double PetalCenter = 37;    // 花瓣 74px 的一半:旋转/缩放的基准点
+    private const double PetalCenter = 95;    // 花瓣布局槽 190px 的一半:旋转/缩放的基准点(圆盘中心)
     // 槽位角(屏幕坐标,Y 向下;顶点朝上的正五边形,相邻 72°):
     // 更多=正上 90° / 登录=左上 162° / 下载=右上 18° / 设置=左下 234° / 版本=右下 306°
     private static readonly double[] TargetAngles = { 162, 18, 234, 306, 90 };
@@ -1037,7 +1037,7 @@ public partial class WidgetWindow : Window
     /// 平移恒为 R、θ 从 (顶点+72°) 扫到顶点 → 花瓣沿圆弧旋转出来;
     /// 72° 恰好等于相邻顶点的角距,五条弧段首尾相接、互不重叠。
     /// 收起时 scale=0:零缩放没有命中面积,不会出现"看不见的花瓣挡住鼠标"。
-    /// 注意:两个 Rotate 的中心都是 (37,37)(花瓣中心),缺一即偏离画面。
+    /// 注意:两个 Rotate 的中心都是 (95,95)(布局槽中心=圆盘中心),缺一即偏离画面。
     /// </summary>
     private static TransformGroup BuildPetalTransform(int index, bool collapsed)
     {
@@ -1148,7 +1148,8 @@ public partial class WidgetWindow : Window
     {
         if (sender is not Button { Tag: string kind }) return;
         var petal = Petals().First(p => string.Equals(p.Tag as string, kind, StringComparison.Ordinal));
-        var point = petal.PointToScreen(new Point(petal.ActualWidth, petal.ActualHeight / 2));
+        // 面板锚点 = 圆盘右缘中心:按钮槽 190px,圆盘 74px 居中 → 右缘 = 半宽 95 + 圆盘半径 37
+        var point = petal.PointToScreen(new Point(petal.ActualWidth / 2 + 37, petal.ActualHeight / 2));
         var onLeft = kind is "login" or "settings";
 
         PanelWindow.ShowPanel(kind, point, onLeft, this);
