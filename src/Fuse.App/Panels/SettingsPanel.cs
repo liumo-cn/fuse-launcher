@@ -62,6 +62,14 @@ public class SettingsPanel : UserControl
                 var dir = System.IO.Path.GetDirectoryName(dialog.FileName);
                 if (!string.IsNullOrEmpty(dir))
                 {
+                    // 与「添加文件夹」同一套校验:盘根/包含启动器本体的目录会把
+                    // 游戏内容和启动器文件混居,是整理/卸载时数据丢失的结构根源
+                    var invalid = AppServices.ValidateGameRoot(dir);
+                    if (invalid != null)
+                    {
+                        new InfoWindow("无法切换到该目录", invalid) { Owner = Window.GetWindow(this) }.ShowDialog();
+                        return;
+                    }
                     AppServices.Config.InstallDirectory = dir;
                     Save();
                     pathValue.Text = dir;

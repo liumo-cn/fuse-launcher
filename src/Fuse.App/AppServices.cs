@@ -126,14 +126,45 @@ public static class AppServices
         WidgetWindow.Boot("[game dir] active: " + Config.ActiveGameDirectory);
     }
 
-    public static void AddGameDirectory(string dir)
+    /// <summary>
+    /// 游戏根目录校验。返回 null = 合法;否则返回给用户看的拒绝原因。
+    /// 拒绝:盘符根(版本/存档直接散落在盘根上,整理/误删时极易波及一切)、
+    /// 启动器本体所在目录及其祖先(游戏内容与启动器文件混居,卸载/清理会连带游戏)。
+    /// exe 目录的子目录(portable 的 games)是合法的。
+    /// </summary>
+    public static string? ValidateGameRoot(string dir)
     {
+        var full = NormalizeDir(dir ?? "");
+        if (string.IsNullOrWhiteSpace(full)) return "目录为空";
+        if (!Directory.Exists(full)) return "目录不存在:" + full;
+        var root = Path.GetPathRoot(full) ?? "";
+        if (root.Length > 0 && string.Equals(full, root, StringComparison.OrdinalIgnoreCase))
+            return "不能把整个磁盘根目录(" + full + ")当作游戏目录。\n\n" +
+                   "版本、存档会直接散落在盘根上,整理文件或卸载时极易误伤。请先新建一个子文件夹(如 " +
+                   Path.Combine(root, "minecraft") + ")再选择它。";
+        var exeDir = (AppContext.BaseDirectory ?? "").TrimEnd('\\', '/');
+        if (string.IsNullOrWhiteSpace(exeDir)) return null;
+        if (string.Equals(full, exeDir, StringComparison.OrdinalIgnoreCase))
+            return "不能把启动器本体所在目录(" + full + ")当作游戏目录。\n\n" +
+                   "游戏内容会和启动器文件混在一起,卸载或更新时会互相波及。请选择它的子文件夹(如 " +
+                   Path.Combine(exeDir, "games") + ")。";
+        if (exeDir.StartsWith(full + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            return "该目录包含启动器本体(" + exeDir + " 在它内部),不能当作游戏目录。\n\n" +
+                   "请选择一个不含启动器文件的文件夹。";
+        return null;
+    }
+
+    public static bool AddGameDirectory(string dir, out string error)
+    {
+        error = "";
         var full = NormalizeDir(dir);
-        if (!Directory.Exists(full)) return;
+        var invalid = ValidateGameRoot(full);
+        if (invalid != null) { error = invalid; return false; }
         if (!GameDirectories.Any(x => x.Equals(full, StringComparison.OrdinalIgnoreCase)))
             Config.ExtraGameDirectories.Add(full);
         SetActiveGameDirectory(full);
         StageGameDirectory(full);   // 导入即自动虚拟隔离,用户无需操作
+        return true;
     }
 
     // ---------- 文件夹列表(折叠列表风格:显示名 / 重命名 / 移出 / 删除 / 新建) ----------
@@ -275,7 +306,7 @@ public static class AppServices
             error = ex.Message;
             return null;
         }
-        AddGameDirectory(game);
+        AddGameDirectory(game, out _);
         WidgetWindow.Boot("[game dir] created: " + game);
         return game;
     }
@@ -464,7 +495,8 @@ public static class AppServices
         catch (Exception ex)
         {
             error = ex.Message;
-            try { if (Directory.Exists(versionDir)) Directory.Delete(versionDir, true); } catch (Exception) { }
+            // reparse 感知:导入目标目录若曾被自动隔离建过 junction,裸递归删除会清空链接目标
+            try { if (Directory.Exists(versionDir)) Fuse.Core.Versioning.SafeDirectory.DeleteTree(versionDir, root); } catch (Exception) { }
             try
             {
                 if (Directory.Exists(instanceDir) &&

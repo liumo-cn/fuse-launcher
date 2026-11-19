@@ -118,12 +118,32 @@ public class VersionsPanel : UserControl
         _list.Children.Add(_folders);
         if (versions.Count == 0)
         {
+            // 空态必须给出"当前在看哪个目录":版本全空最常见的原因是激活目录选错层级
+            // 或目录被移动/清空,只写"还没有版本"用户无法区分这两种情况
             _list.Children.Add(new TextBlock
             {
                 Text = "还没有版本",
                 FontSize = 12,
+                Foreground = (Brush)Application.Current.Resources["TextPrimaryBrush"],
+                Margin = new Thickness(4, 10, 4, 4),
+            });
+            _list.Children.Add(new TextBlock
+            {
+                Text = "当前游戏目录:\n" + AppServices.ActiveGameDirectory,
+                FontSize = 11,
+                FontFamily = new FontFamily("Consolas"),
+                TextWrapping = TextWrapping.Wrap,
                 Foreground = (Brush)Application.Current.Resources["TextSecondaryBrush"],
-                Margin = new Thickness(4, 10, 4, 10),
+                Margin = new Thickness(4, 0, 4, 4),
+            });
+            _list.Children.Add(new TextBlock
+            {
+                Text = "版本应位于该目录的 versions/<版本>/<版本>.json。若版本在别的文件夹,在上方列表点击切换;" +
+                       "找不到本机的 MC 目录可用下方「自动查找」。",
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = (Brush)Application.Current.Resources["TextSecondaryBrush"],
+                Margin = new Thickness(4, 0, 4, 10),
             });
             return;
         }

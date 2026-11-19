@@ -304,8 +304,35 @@ public sealed class FolderListPanel : UserControl
         };
         if (dlg.ShowDialog(new DialogKit.OwnerHandle(DialogKit.HandleOf(Window.GetWindow(this)!))) !=
             System.Windows.Forms.DialogResult.OK) return;
-        AppServices.AddGameDirectory(dlg.SelectedPath);
+        if (!AppServices.AddGameDirectory(dlg.SelectedPath, out var error))
+        {
+            Toast.ShowNearOrb("未能添加:" + error.Replace("\n\n", " "));
+            return;
+        }
+        // 选错层级是"版本列表全空"最常见的原因:目录里没有任何 versions/<id>/<id>.json 时明确提示,
+        // 别让用户把"选错目录"当成"数据丢了"
+        if (!HasVisibleVersions(dlg.SelectedPath))
+            Toast.ShowNearOrb("已添加并切换,但目录里没发现 MC 版本(应有 versions/<版本>/<版本>.json),请确认层级");
         Changed?.Invoke();
+    }
+
+    /// <summary>目录里是否至少存在一个可识别的版本(versions/&lt;id&gt;/&lt;id&gt;.json)。</summary>
+    private static bool HasVisibleVersions(string root)
+    {
+        try
+        {
+            var versions = Path.Combine(root, "versions");
+            if (!Directory.Exists(versions)) return false;
+            foreach (var dir in Directory.EnumerateDirectories(versions))
+            {
+                var id = Path.GetFileName(dir);
+                if (File.Exists(Path.Combine(dir, id + ".json"))) return true;
+            }
+        }
+        catch (Exception)
+        {
+        }
+        return false;
     }
 
     /// <summary>一键添加本机目录:后台扫描常见位置,弹结果清单让用户勾选。</summary>

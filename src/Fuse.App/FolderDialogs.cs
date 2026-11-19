@@ -731,12 +731,15 @@ internal sealed class AutoAddFoldersWindow : Window
     private void TryAdd()
     {
         var added = 0;
+        var errors = new List<string>();
         foreach (var (folder, check) in _rows)
         {
             if (check.IsChecked != true) continue;
-            AppServices.AddGameDirectory(folder.Path);
-            added++;
+            if (AppServices.AddGameDirectory(folder.Path, out var error)) added++;
+            else errors.Add(folder.Path + "\n  " + error.Replace("\n\n", "\n"));
         }
+        if (errors.Count > 0)
+            new InfoWindow("部分目录未能添加", string.Join("\n", errors)) { Owner = Owner }.ShowDialog();
         if (added > 0) _onAdded(added);
         DialogResult = added > 0;
     }
