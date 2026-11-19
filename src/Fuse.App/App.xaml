@@ -537,21 +537,24 @@
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <!-- 悬浮放大层:以自身中心为基准(56px 的一半),代码里把 ScaleX/Y 动画到 1.25 -->
-            <Grid x:Name="petalRoot" RenderTransformOrigin="0.5,0.5">
-              <Grid.RenderTransform>
-                <ScaleTransform x:Name="petalHoverScale" ScaleX="1" ScaleY="1"/>
-              </Grid.RenderTransform>
-              <!-- 光晕盘:启动时把「羽化圆 + 56px 模糊」预渲染成位图(GlowCache),
-                   动画只做位图合成,不再每帧重跑模糊 -->
+            <!-- 光晕图必须在悬浮缩放子树【之外】:悬浮时 petalHoverScale 变成非恒等变换,
+                 溢出按钮槽位的 190px 光晕会在缩放子树的渲染里被方形裁切(分层窗口残留,
+                 低特效下没有逐帧重绘冲不掉)。缩放只作用于玻璃圆盘和图标(74px 内)。 -->
+            <Grid>
               <Image x:Name="glowPulse" Source="{DynamicResource PetalGlowImage}"
                      Width="190" Height="190" Stretch="Fill"
                      HorizontalAlignment="Center" VerticalAlignment="Center"
                      IsHitTestVisible="False"
                      RenderOptions.BitmapScalingMode="HighQuality"/>
-              <!-- 玻璃盘:边缘羽化的主题色圆 -->
-              <Ellipse x:Name="bd" Fill="{DynamicResource PetalFillSoftBrush}"/>
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              <!-- 悬浮放大层:以自身中心为基准(56px 的一半),代码里把 ScaleX/Y 动画到 1.25 -->
+              <Grid x:Name="petalRoot" RenderTransformOrigin="0.5,0.5">
+                <Grid.RenderTransform>
+                  <ScaleTransform x:Name="petalHoverScale" ScaleX="1" ScaleY="1"/>
+                </Grid.RenderTransform>
+                <!-- 玻璃盘:边缘羽化的主题色圆 -->
+                <Ellipse x:Name="bd" Fill="{DynamicResource PetalFillSoftBrush}"/>
+                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+              </Grid>
             </Grid>
             <ControlTemplate.Triggers>
               <!-- 悬浮:只换渐变换亮(不加任何描边/Effect——Effect 的中间渲染面会在
