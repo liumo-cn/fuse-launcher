@@ -70,6 +70,8 @@ internal static class GlowCache
     private const double PetalShadowOpacity = 0.6;
 
     public static BitmapSource? PetalGlow { get; private set; }
+    /// <summary>悬浮态:同一光晕但更亮(替代原来悬浮时给 bd 现挂的 DropShadowEffect)。</summary>
+    public static BitmapSource? PetalGlowHover { get; private set; }
     public static IReadOnlyList<BitmapSource?> OrbFrames => _orbFrames;
 
     private static readonly BitmapSource?[] _orbFrames = new BitmapSource?[FrameRadii.Length];
@@ -83,6 +85,8 @@ internal static class GlowCache
         {
             PetalGlow = GlowFactory.Bake(
                 petalGlowFill, PetalDisc, PetalBlur, accent, PetalShadowOpacity, PetalCanvas, PetalScale);
+            PetalGlowHover = GlowFactory.Bake(
+                petalGlowFill, PetalDisc, PetalBlur, accent, 0.95, PetalCanvas, PetalScale);
         }
         catch (Exception ex)
         {

@@ -599,6 +599,12 @@ public partial class WidgetWindow : Window
         OrbBody.Source = GlowCache.FrameAt(0);
         _lastGlowAt = DateTime.MinValue;
 
+        // 花瓣光晕位图也换了新主题:任何悬浮态残留的旧图一并重置
+        foreach (var petal in Petals())
+            if (TemplateChild(petal, "glowPulse") is System.Windows.Controls.Image img &&
+                GlowCache.PetalGlow != null)
+                img.Source = GlowCache.PetalGlow;
+
         // 星光动画挂在预渲染图上,换帧后重新挂一次即可
         if (IsLoaded) StartTwinkle();
     }
@@ -762,6 +768,14 @@ public partial class WidgetWindow : Window
             {
                 var offset = _floatOffsets[index];
                 StartPetalFloat(index, offset?.X ?? 0, offset?.Y ?? 0);
+            }
+
+            // 光晕增亮 = 换预渲染的悬浮态位图(不再给 bd 现挂 DropShadowEffect:
+            // Effect 的中间渲染面会在分层窗口里留下方形残留,低特效下无星光重绘冲不掉)
+            if (TemplateChild(petal, "glowPulse") is System.Windows.Controls.Image img)
+            {
+                var src = entering ? GlowCache.PetalGlowHover : GlowCache.PetalGlow;
+                if (src != null) img.Source = src;
             }
 
             var scale = petal.Template?.FindName("petalHoverScale", petal) as ScaleTransform;

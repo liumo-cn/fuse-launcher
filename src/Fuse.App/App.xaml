@@ -554,14 +554,10 @@
               <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Grid>
             <ControlTemplate.Triggers>
-              <!-- 悬浮:只换渐变换亮(不加任何描边),和常态一样是柔和过渡 -->
+              <!-- 悬浮:只换渐变换亮(不加任何描边/Effect——Effect 的中间渲染面会在
+                   分层窗口里留下方形残留,且低特效下没有星光重绘来冲掉它) -->
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="bd" Property="Fill" Value="{DynamicResource PetalHoverFillBrush}"/>
-                <Setter TargetName="bd" Property="Effect">
-                  <Setter.Value>
-                    <DropShadowEffect BlurRadius="24" Color="{DynamicResource HoverColor}" ShadowDepth="0" Opacity="0.6"/>
-                  </Setter.Value>
-                </Setter>
               </Trigger>
             </ControlTemplate.Triggers>
           </ControlTemplate>
