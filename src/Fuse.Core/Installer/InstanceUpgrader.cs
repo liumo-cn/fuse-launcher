@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using Fuse.Core.Versioning;
 using Newtonsoft.Json;
 
 namespace Fuse.Core.Installer;
@@ -30,7 +31,13 @@ public static class InstanceUpgrader
     {
         var fullInstance = Path.GetFullPath(instanceDir).TrimEnd('\\', '/');
         var oldDir = fullInstance + ".old-" + stamp;
-        if (Directory.Exists(oldDir)) Directory.Delete(oldDir, true);
+        if (Directory.Exists(oldDir))
+        {
+            // 实例目录里可能有自动虚拟隔离建的 junction(指向共享根/启动器目录):
+            // net48 的 Directory.Delete(recursive) 会穿进目标清空内容,必须 reparse 感知
+            SafeDirectory.DeleteTree(oldDir, Path.GetDirectoryName(oldDir)
+                ?? throw new InvalidOperationException("实例目录无效"));
+        }
         Directory.Move(fullInstance, oldDir);
         try
         {
@@ -95,6 +102,9 @@ public static class InstanceUpgrader
             try { Directory.Move(failed, fullInstance); } catch (IOException) { }
             throw;
         }
-        try { Directory.Delete(failed, true); } catch (IOException) { }
+        // 同 SwapIn:.failed 里可能有 junction,必须 reparse 感知,否则会清空共享内容
+        try { SafeDirectory.DeleteTree(failed, Path.GetDirectoryName(failed)
+            ?? throw new InvalidOperationException("实例目录无效")); }
+        catch (IOException) { }
     }
 }

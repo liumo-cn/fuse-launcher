@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using Fuse.Core.Launcher;
 
 namespace Fuse.Core.Versioning;
 
@@ -93,7 +94,10 @@ public static class IsolationStager
         CopyIfMissing(Path.Combine(root, "servers.dat"), Path.Combine(versionDir, "servers.dat"), result);
 
         // 根上其余内容目录也链进去:mods/config 之外还有 kubejs/schematics 等任意内容,
-        // 隔离前游戏把它们当共享内容,隔离后不链就等于凭空消失
+        // 隔离前游戏把它们当共享内容,隔离后不链就等于凭空消失。
+        // 但启动器目录和嵌套游戏目录绝不链:junction 是"跟随删除"的靶子
+        // (net48 递归删除会穿进目标清空内容),把启动器/整个游戏树链进版本目录
+        // 等于给下一次误删装上引信(2026-11-20 用户 data/instances 被清空的根因之一)。
         try
         {
             foreach (var dir in Directory.GetDirectories(root))
@@ -102,6 +106,8 @@ public static class IsolationStager
                 if (name.StartsWith(".", StringComparison.Ordinal)) continue;
                 if (LauncherDirs.Contains(name)) continue;
                 if (Array.IndexOf(ContentDirs, name) >= 0) continue;
+                if (OverlapsLauncher(dir, installDirectory)) continue;
+                if (McFolderFinder.IsGameFolder(dir)) continue;   // 嵌套的游戏根/官方 .minecraft
                 var inVersion = Path.Combine(versionDir, name);
                 if (Directory.Exists(inVersion)) { result.AlreadyOk++; continue; }
                 TryRemoveDanglingLink(inVersion);
@@ -166,6 +172,28 @@ public static class IsolationStager
             var text = File.ReadAllText(jsonPath);
             return text.IndexOf("\"fuseModpack\"", StringComparison.Ordinal) >= 0 ||
                    text.IndexOf("fusePackSlug", StringComparison.Ordinal) >= 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 该目录与启动器安装目录是否重叠(相同/互为祖先后代)。
+    /// 启动器目录与它的任何上层/下层都不是游戏共享内容,一律不链。
+    /// </summary>
+    private static bool OverlapsLauncher(string dir, string installDirectory)
+    {
+        try
+        {
+            var d = Full(dir);
+            var i = Full(installDirectory ?? "");
+            if (i.Length == 0) return false;
+            if (Same(d, i)) return true;
+            if (d.StartsWith(i + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return true;
+            if (i.StartsWith(d + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
         }
         catch (Exception)
         {

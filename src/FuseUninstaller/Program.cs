@@ -135,11 +135,29 @@ internal static class Program
     }
 
     /// <summary>删除安装目录:先重试(后台进程句柄释放需要时间),还不行就交给退出后的 cmd。</summary>
+    /// <summary>游戏内容子目录:游戏根与安装目录重合时,卸载只删启动器本体,这些全部保留。</summary>
+    private static readonly string[] GameContentDirs =
+    {
+        "versions", "instances", "saves", "mods", "config",
+        "resourcepacks", "shaderpacks", "libraries", "assets",
+    };
+
     private static bool RemoveInstallDir(string installDir)
     {
         // 便携模式下游戏目录在 <安装目录>\games:卸载只删启动器,不能把游戏/存档一起删掉
         var gamesDir = Path.Combine(installDir, "games");
         var protectGames = Directory.Exists(gamesDir);
+        // 游戏根可能就是安装目录本身(用户把游戏下载目录设成了启动器文件夹):
+        // 此时 versions/instances/saves 等全是游戏内容,与 games 一样保护
+        var protectNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "games" };
+        if (!protectGames && LooksLikeGameRoot(installDir))
+        {
+            foreach (var n in GameContentDirs) protectNames.Add(n);
+            Log("install dir looks like game root: protecting " + string.Join("/", GameContentDirs));
+        }
+        // 嵌套在安装目录里的游戏根(如用户自建的 .minecraft)整体保护
+        var protectedRoots = FindGameRootDirs(installDir);
+
         for (var i = 0; i < 10; i++)
         {
             if (!Directory.Exists(installDir)) return true;
@@ -147,20 +165,20 @@ internal static class Program
             {
                 foreach (var entry in Directory.EnumerateFileSystemEntries(installDir).ToList())
                 {
-                    if (protectGames &&
-                        Path.GetFileName(entry).Equals("games", StringComparison.OrdinalIgnoreCase))
+                    var name = Path.GetFileName(entry);
+                    if (protectNames.Contains(name) || protectedRoots.Contains(entry))
                         continue;
-                    if (Directory.Exists(entry)) Directory.Delete(entry, true);
+                    if (Directory.Exists(entry)) DeleteTreeSafe(entry);
                     else File.Delete(entry);
                 }
-                if (protectGames)
+                if (protectGames || protectedRoots.Count > 0 || protectNames.Count > 1)
                 {
                     if (!Directory.EnumerateFileSystemEntries(installDir).Any())
                         Directory.Delete(installDir, false);
                 }
                 else
                 {
-                    Directory.Delete(installDir, true);
+                    DeleteTreeSafe(installDir);
                 }
                 return true;
             }
@@ -172,6 +190,73 @@ internal static class Program
         }
         Log(protectGames ? "install dir kept (games preserved)" : "install dir cleanup failed");
         return false;
+    }
+
+    /// <summary>目录是否是游戏根:含 versions/&lt;id&gt;/&lt;id&gt;.json。</summary>
+    private static bool LooksLikeGameRoot(string dir)
+    {
+        try
+        {
+            var versions = Path.Combine(dir, "versions");
+            if (!Directory.Exists(versions)) return false;
+            foreach (var versionDir in Directory.EnumerateDirectories(versions))
+            {
+                var id = Path.GetFileName(versionDir);
+                if (File.Exists(Path.Combine(versionDir, id + ".json"))) return true;
+            }
+        }
+        catch (Exception ex) { Log("scan game root: " + ex.Message); }
+        return false;
+    }
+
+    /// <summary>安装目录下"看起来是游戏根"的子目录:含 versions/&lt;id&gt;/&lt;id&gt;.json。</summary>
+    private static HashSet<string> FindGameRootDirs(string installDir)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var dir in Directory.EnumerateDirectories(installDir))
+            {
+                var versions = Path.Combine(dir, "versions");
+                if (!Directory.Exists(versions)) continue;
+                foreach (var versionDir in Directory.EnumerateDirectories(versions))
+                {
+                    var id = Path.GetFileName(versionDir);
+                    if (File.Exists(Path.Combine(versionDir, id + ".json")))
+                    {
+                        result.Add(dir);
+                        break;
+                    }
+                }
+            }
+        }
+        catch (Exception ex) { Log("scan game roots: " + ex.Message); }
+        return result;
+    }
+
+    /// <summary>
+    /// reparse 感知的递归删除:遇到 junction/符号链接只摘链接本身,绝不进入目标。
+    /// net48 的 Directory.Delete(recursive) 会穿进链接清空目标内容 ——
+    /// 自动虚拟隔离在版本目录里建的 junction 一旦被这里跟随,共享根/启动器目录就被清空。
+    /// </summary>
+    private static void DeleteTreeSafe(string path)
+    {
+        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        {
+            Directory.Delete(path, false);
+            return;
+        }
+        foreach (var entry in Directory.EnumerateFileSystemEntries(path).ToList())
+        {
+            if (Directory.Exists(entry) &&
+                (File.GetAttributes(entry) & FileAttributes.ReparsePoint) == 0)
+                DeleteTreeSafe(entry);
+            else if (Directory.Exists(entry))
+                Directory.Delete(entry, false);   // 链接:只摘本身
+            else
+                File.Delete(entry);
+        }
+        Directory.Delete(path, false);
     }
 
     private static void ScheduleSelfDelete(string self)

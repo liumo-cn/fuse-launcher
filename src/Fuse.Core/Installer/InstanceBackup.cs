@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using Fuse.Core.Versioning;
 using Newtonsoft.Json.Linq;
 
 namespace Fuse.Core.Installer;
@@ -95,7 +96,9 @@ public static class InstanceBackup
             var old = fullInstance + ".old-" + Guid.NewGuid().ToString("N")[..8];
             if (Directory.Exists(fullInstance)) Directory.Move(fullInstance, old);
             Directory.Move(temp, fullInstance);
-            try { if (Directory.Exists(old)) Directory.Delete(old, true); } catch (IOException) { }
+            // 旧实例目录可能含自动虚拟隔离的 junction:reparse 感知删除,不清空链接目标
+            try { if (Directory.Exists(old)) SafeDirectory.DeleteTree(old, parent); }
+            catch (IOException) { }
         }
         catch
         {

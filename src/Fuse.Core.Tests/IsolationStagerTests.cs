@@ -244,4 +244,51 @@ public class IsolationStagerTests : IDisposable
 
         Assert.Equal("managed layout", r.Skipped);
     }
+
+    /// <summary>
+    /// 事故回归(2026-11-20):游戏根包含启动器目录/嵌套游戏目录时,
+    /// 绝不能把它们 junction 进版本目录 —— 否则任何跟随链接的删除都会清空启动器与游戏树。
+    /// 布局模拟事故现场:游戏根 = D:\,启动器 = D:\fuse,用户自建 minecraft 文件夹。
+    /// </summary>
+    [Fact]
+    public void Stage_SkipsLauncherDirAndNestedGameFolders()
+    {
+        MakeSharedContent();
+        // 启动器目录:根下的一个子目录,它就是本次传入的 installDirectory
+        var launcher = Path.Combine(_root, "fuse");
+        Directory.CreateDirectory(launcher);
+        File.WriteAllText(Path.Combine(launcher, "Fuse Launcher.exe"), "exe");
+        // 嵌套的游戏根:用户自建的 minecraft 文件夹
+        var nested = Path.Combine(_root, "my-mc");
+        Directory.CreateDirectory(Path.Combine(nested, "versions", "v9"));
+        File.WriteAllText(Path.Combine(nested, "versions", "v9", "v9.json"), "{}");
+        // 普通共享内容目录:仍然要链
+        Directory.CreateDirectory(Path.Combine(_root, "kubejs"));
+
+        var r = IsolationStager.EnsureStaged(_root, "v1", launcher);
+
+        Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v1", "fuse")));
+        Assert.False(Directory.Exists(Path.Combine(_root, "versions", "v1", "my-mc")));
+        Assert.True(Directory.Exists(Path.Combine(_root, "versions", "v1", "kubejs")));   // 正常内容不受影响
+        Assert.DoesNotContain("fuse", r.Junctions);
+        Assert.DoesNotContain("my-mc", r.Junctions);
+        Assert.Contains("kubejs", r.Junctions);
+    }
+
+    /// <summary>SafeDirectory 对树内任意深度的 junction 只摘链接:删除后目标内容完好。</summary>
+    [Fact]
+    public void SafeDeleteTree_DeepJunctionInside_RemovesLinkOnly()
+    {
+        var target = Path.Combine(_root, "real");
+        Directory.CreateDirectory(target);
+        File.WriteAllText(Path.Combine(target, "f.txt"), "keep");
+        var outer = Path.Combine(_root, "outer", "inner");
+        Directory.CreateDirectory(outer);
+        Assert.True(IsolationStager.CreateJunction(Path.Combine(outer, "mods"), target));
+
+        SafeDirectory.DeleteTree(Path.Combine(_root, "outer"), _root);
+
+        Assert.False(Directory.Exists(Path.Combine(_root, "outer")));
+        Assert.True(File.Exists(Path.Combine(target, "f.txt")));
+    }
 }
