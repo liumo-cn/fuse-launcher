@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text;
 using Newtonsoft.Json;
 
 namespace Fuse.Core.Config;
@@ -98,7 +99,10 @@ public sealed class AppConfig
         var dir = Path.GetDirectoryName(Path.GetFullPath(path))!;
         Directory.CreateDirectory(dir);
         var tmp = path + ".tmp";
-        File.WriteAllText(tmp, JsonConvert.SerializeObject(this, Formatting.Indented));
+        // 带 BOM 的 UTF-8:外部工具(PowerShell 5.1 等)按 BOM 识别编码,
+        // 否则会把中文路径按 ANSI 读成乱码再写回,损坏配置(2026-11-20 实测事故)
+        File.WriteAllText(tmp, JsonConvert.SerializeObject(this, Formatting.Indented),
+            new UTF8Encoding(true));
         if (File.Exists(path)) File.Delete(path);
         File.Move(tmp, path);
     }

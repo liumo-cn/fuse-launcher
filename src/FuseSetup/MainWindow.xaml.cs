@@ -427,7 +427,8 @@ public partial class MainWindow : Window
     private static void WriteInitialConfig(string path, string gamesDir)
     {
         var escaped = gamesDir.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        File.WriteAllText(path, "{\"InstallDirectory\": \"" + escaped + "\"}", new UTF8Encoding(false));
+        // 与 AppConfig.Save 一致:带 BOM 的 UTF-8,外部工具能正确识别中文路径
+        File.WriteAllText(path, "{\"InstallDirectory\": \"" + escaped + "\"}", new UTF8Encoding(true));
     }
 
     /// <summary>
