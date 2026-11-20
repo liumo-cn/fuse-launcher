@@ -140,8 +140,8 @@ public partial class WidgetWindow : Window
         orbFx.Children.Add(_orbShift);
         Orb.RenderTransform = orbFx;
 
-        // 预渲染光晕在大圆 Grid 之外(SafeArea 里),呼吸/脉冲的缩放平移要同步镜像过去
-        _orbBodyScale = new ScaleTransform(1, 1, 250, 250);
+        // 预渲染光晕在窗口层(完整处于窗口内),呼吸/脉冲的缩放平移要同步镜像过去
+        _orbBodyScale = new ScaleTransform(1, 1, 150, 150);
         _orbBodyShift = new TranslateTransform();
         var bodyFx = new TransformGroup();
         bodyFx.Children.Add(_orbBodyScale);

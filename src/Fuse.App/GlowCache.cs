@@ -59,8 +59,8 @@ internal static class GlowCache
     /// <summary>与旧动画一一对应的模糊档位(120 静息,210 成功脉冲峰值)。</summary>
     public static readonly double[] FrameRadii = { 120, 134, 152, 172, 192, 210 };
 
-    private const double OrbCanvas = 500;   // 80 + 2×210
-    private const double OrbScale = 0.5;    // 光晕很软,半分辨率放大看不出
+    private const double OrbCanvas = 300;   // 80px 圆盘 + 辉光衰减实测半径 ≤105,300 足够且完整处于窗口内
+    private const double OrbScale = 1.0;    // 300px 位图 1:1 渲染
     private const double OrbShadowOpacity = 0.9;
 
     private const double PetalDisc = 74;
