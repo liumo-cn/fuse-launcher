@@ -60,3 +60,6 @@ docs/audit-2026-11-07-oss-1.2.0.md
 
 # 抖音发布素材(本地工作稿,不入仓库)
 promote/douyin/
+
+# 内部质量冲刺审计文档(含本机信息,不随仓库分发)
+/ai-quality-sprint/
